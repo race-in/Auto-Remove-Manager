@@ -289,7 +289,7 @@ def read_deluge_port(configs: list[dict[str, str]]) -> int:
                 port = 0
             if 1 <= port <= 65535:
                 return port
-        match = re.search(r'["\\']?daemon_port["\\']?\\s*:\\s*(\\d+)', raw)
+        match = re.search(r"daemon_port\\s*:\\s*(\\d+)", raw)
         if match:
             port = int(match.group(1))
             if 1 <= port <= 65535:
