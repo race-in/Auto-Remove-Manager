@@ -172,7 +172,7 @@ data = {
     "preview_only": True,
     "allow_removal": False,
     "allow_data_deletion": False,
-    "schedule": {"enabled": True, "interval_minutes": 60}
+    "schedule": {"enabled": True}
 }
 fd, tmp = tempfile.mkstemp(prefix=".manager-", dir=os.path.dirname(path), text=True)
 try:
