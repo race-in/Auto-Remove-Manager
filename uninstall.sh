@@ -53,8 +53,15 @@ if [[ "$MODE" == root ]]; then
   BIN="/usr/local/bin/autoremove-manager"
   UNIT_DIR="/etc/systemd/system"
   CRON_USER=""
-  if [[ -f "$CONFIG_DIR/owner" ]]; then
-    CRON_USER="$(cat "$CONFIG_DIR/owner")"
+  if [[ -d "$CONFIG_DIR" && -f "$CONFIG_DIR/.arm-owned" ]] &&
+     [[ "$(cat "$CONFIG_DIR/.arm-owned")" == "$MARKER" ]] &&
+     [[ -f "$CONFIG_DIR/owner" ]]; then
+    candidate_user="$(cat "$CONFIG_DIR/owner")"
+    if getent passwd "$candidate_user" >/dev/null 2>&1; then
+      CRON_USER="$candidate_user"
+    else
+      warn "Saved cron owner is not a local account; leaving its crontab untouched."
+    fi
   fi
 else
   [[ "$EUID" -ne 0 ]] || die "Rootless uninstall must run as the installing user. Do not use sudo."
@@ -89,6 +96,16 @@ timer_owned=0
 if [[ -f "$service_path" ]] && grep -Fq "$MARKER" "$service_path"; then service_owned=1; fi
 if [[ -f "$timer_path" ]] && grep -Fq "$MARKER" "$timer_path"; then timer_owned=1; fi
 
+owned_install=0
+for owned_dir in "$BASE" "$CONFIG_DIR" "$STATE_DIR"; do
+  if [[ -d "$owned_dir" && -f "$owned_dir/.arm-owned" ]] &&
+     [[ "$(cat "$owned_dir/.arm-owned")" == "$MARKER" ]]; then
+    owned_install=1
+  fi
+done
+if [[ -f "$BIN" ]] && grep -Fq "$MARKER" "$BIN"; then owned_install=1; fi
+if ((service_owned || timer_owned)); then owned_install=1; fi
+
 if [[ "$MODE" == root ]]; then
   if ((timer_owned)); then systemctl disable --now auto-remove-manager.timer >/dev/null 2>&1 || true; fi
   if ((service_owned)); then systemctl stop auto-remove-manager.service >/dev/null 2>&1 || true; fi
@@ -108,13 +125,19 @@ for unit in auto-remove-manager.service auto-remove-manager.timer; do
 done
 
 if [[ "$MODE" == root ]]; then
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  if [[ -n "$CRON_USER" ]]; then
+  if ((service_owned || timer_owned)); then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$CRON_USER" ]] && ((owned_install)); then
     remove_marked_cron "$CRON_USER"
   fi
 else
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
-  remove_marked_cron ""
+  if ((service_owned || timer_owned)); then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  if ((owned_install)); then
+    remove_marked_cron ""
+  fi
 fi
 
 if [[ -f "$BIN" ]] && grep -Fq "$MARKER" "$BIN"; then
