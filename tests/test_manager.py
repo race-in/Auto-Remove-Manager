@@ -44,6 +44,29 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(rtorrent["detected"])
         self.assertEqual(rtorrent["status"], "detected_but_no_upstream_adapter")
 
+    def test_rtorrent_package_is_reported_without_adapter(self):
+        with mock.patch.object(manager, "process_inventory", return_value=[]), mock.patch.object(
+            manager, "service_inventory", return_value=[]
+        ), mock.patch.object(manager, "package_inventory", return_value=["rtorrent"]), mock.patch.object(
+            manager, "config_inventory", return_value=[]
+        ):
+            found = manager.detect_clients("root")
+        rtorrent = found["detection_only"][0]
+        self.assertTrue(rtorrent["detected"])
+        self.assertEqual(rtorrent["packages"], ["rtorrent"])
+        self.assertEqual(rtorrent["status"], "detected_but_no_upstream_adapter")
+
+    def test_process_details_do_not_expose_raw_arguments(self):
+        with mock.patch.object(manager, "process_inventory", return_value=[
+            {"user": "seed", "command": "qbittorrent-nox", "args": "qbittorrent-nox --password=secret"}
+        ]), mock.patch.object(manager, "service_inventory", return_value=[]), mock.patch.object(
+            manager, "package_inventory", return_value=[]
+        ), mock.patch.object(manager, "config_inventory", return_value=[]):
+            found = manager.detect_clients("root")
+        qb = next(item for item in found["supported"] if item["client"] == "qbittorrent")
+        self.assertEqual(qb["processes"], [{"user": "seed", "command": "qbittorrent-nox"}])
+        self.assertNotIn("secret", str(found))
+
     def test_qbittorrent_port_is_detected_from_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = pathlib.Path(tmp) / "qBittorrent.conf"
