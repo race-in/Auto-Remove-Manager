@@ -172,7 +172,7 @@ def detect_clients(mode: str) -> dict[str, Any]:
 
     for client, names in SUPPORTED.items():
         process_hits = [
-            {"user": item["user"], "command": item["command"], "args": item["args"]}
+            {"user": item["user"], "command": item["command"]}
             for item in processes
             if item["command"].lower() in {name.lower() for name in names}
             or any(re.search(r"(^|[/ ])" + re.escape(name) + r"([ /]|$)", item["args"], re.I) for name in names)
@@ -202,7 +202,7 @@ def detect_clients(mode: str) -> dict[str, Any]:
 
     for client, names in DETECTION_ONLY.items():
         process_hits = [
-            {"user": item["user"], "command": item["command"], "args": item["args"]}
+            {"user": item["user"], "command": item["command"]}
             for item in processes
             if item["command"].lower() in {name.lower() for name in names}
             or any(re.search(r"(^|[/ ])" + re.escape(name) + r"([ /]|$)", item["args"], re.I) for name in names)
