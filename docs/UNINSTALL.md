@@ -6,6 +6,12 @@ Use the installed command for a guided one-click removal:
 autoremove-manager uninstall
 ```
 
+For a non-interactive uninstall after you have reviewed the paths:
+
+```bash
+autoremove-manager uninstall --yes
+```
+
 Or run the uninstaller directly.
 
 Root/system-wide, as root:
@@ -39,3 +45,7 @@ It does **not** remove or modify:
 If an ownership marker is missing or a managed path is a symlink, the
 uninstaller leaves that item untouched and reports the reason instead of
 risking deletion outside its scope.
+
+Shared system packages such as Python, Git, and systemd are intentionally left
+installed. They may be used by the OS or other applications and are not
+exclusive to this manager. pip caching is disabled during installation.
