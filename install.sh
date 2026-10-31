@@ -180,6 +180,10 @@ done
 [[ ! -e "$CONFIG_DIR/config.yml" || -f "$CONFIG_DIR/config.yml" ]] || die "config.yml is not a regular file."
 
 VENV="$BASE/venv"
+[[ ! -L "$VENV" ]] || die "Refusing symlinked virtual environment path: $VENV"
+if [[ -e "$VENV" && ! -d "$VENV" ]]; then
+  die "Virtual environment path exists but is not a directory: $VENV"
+fi
 if [[ ! -x "$VENV/bin/python" ]]; then
   if ! python3 -m venv "$VENV"; then
     if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
@@ -228,10 +232,6 @@ if [[ ! -f "$CONFIG_DIR/config.yml" ]]; then
 fi
 printf '%s\n' "$RUN_USER" > "$CONFIG_DIR/owner"
 chmod 600 "$CONFIG_DIR/manager.json" "$CONFIG_DIR/config.yml" "$CONFIG_DIR/owner"
-
-if [[ -L "$VENV" ]]; then
-  die "Refusing symlinked virtual environment path: $VENV"
-fi
 
 cat > "$BIN_DIR/autoremove-manager" <<EOF
 #!/usr/bin/env bash
