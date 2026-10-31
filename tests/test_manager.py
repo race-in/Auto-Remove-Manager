@@ -73,6 +73,24 @@ class ManagerTests(unittest.TestCase):
             config.write_text("[Preferences]\nWebUI\\Port=17890\n", encoding="utf-8")
             self.assertEqual(manager.read_qbittorrent_port([{"path": str(config)}]), 17890)
 
+    def test_qbittorrent_port_is_detected_from_modern_webui_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = pathlib.Path(tmp) / "qBittorrent.conf"
+            config.write_text("[Preferences]\\nDownloads\\SavePath=/data\\n[WebUI]\\nPort=9001\\n", encoding="utf-8")
+            self.assertEqual(manager.read_qbittorrent_port([{"path": str(config)}]), 9001)
+
+    def test_qbittorrent_login_accepts_http_204(self):
+        self.assertTrue(manager.qbittorrent_login_response_succeeded(204, ""))
+
+    def test_qbittorrent_login_accepts_legacy_http_200_ok(self):
+        self.assertTrue(manager.qbittorrent_login_response_succeeded(200, "Ok."))
+
+    def test_qbittorrent_login_rejects_legacy_http_200_fails(self):
+        self.assertFalse(manager.qbittorrent_login_response_succeeded(200, "Fails."))
+
+    def test_qbittorrent_login_rejects_http_401(self):
+        self.assertFalse(manager.qbittorrent_login_response_succeeded(401, "Unauthorized"))
+
     def test_default_hosts(self):
         self.assertEqual(manager.default_host("deluge", []), "127.0.0.1:58846")
         self.assertEqual(manager.default_host("transmission", []), "http://127.0.0.1:9091")
