@@ -14,13 +14,24 @@ class ManagerTests(unittest.TestCase):
         with mock.patch.object(manager, "process_inventory", return_value=[
             {"user": "seed", "command": "qbittorrent-nox", "args": "qbittorrent-nox"}
         ]), mock.patch.object(manager, "service_inventory", return_value=[]), mock.patch.object(
-            manager, "config_inventory", return_value=[]
-        ):
+            manager, "package_inventory", return_value=[]
+        ), mock.patch.object(manager, "config_inventory", return_value=[]):
             found = manager.detect_clients("root")
         qb = next(item for item in found["supported"] if item["client"] == "qbittorrent")
         self.assertTrue(qb["detected"])
         self.assertFalse(qb["api_verified"])
         self.assertEqual(qb["status"], "candidate")
+
+    def test_package_inventory_detects_installed_client(self):
+        with mock.patch.object(manager, "process_inventory", return_value=[]), mock.patch.object(
+            manager, "service_inventory", return_value=[]
+        ), mock.patch.object(manager, "package_inventory", return_value=["qbittorrent-nox"]), mock.patch.object(
+            manager, "config_inventory", return_value=[]
+        ):
+            found = manager.detect_clients("root")
+        qb = next(item for item in found["supported"] if item["client"] == "qbittorrent")
+        self.assertTrue(qb["detected"])
+        self.assertEqual(qb["packages"], ["qbittorrent-nox"])
 
     def test_rtorrent_is_report_only(self):
         with mock.patch.object(manager, "process_inventory", return_value=[
