@@ -186,7 +186,22 @@ def default_host(client: str, configs: list[dict[str, str]]) -> str:
     raise ValueError(f"Unsupported client: {client}")
 
 
-def configure_clients(mode: str, upstream_config: pathlib.Path) -> int:
+def verify_client_connection(task_name: str, task_conf: dict[str, Any], log_dir: pathlib.Path) -> bool:
+    """Authenticate and read basic client state without listing or removing torrents."""
+    try:
+        from autoremovetorrents.logger import Logger
+        from autoremovetorrents.task import Task
+        log_dir.mkdir(parents=True, exist_ok=True)
+        Logger.init(str(log_dir))
+        task = Task(task_name, task_conf, remove_torrents=False)
+        task._login()
+        return True
+    except Exception as exc:  # Never print exception text: adapters may include endpoint details.
+        print(f"  API verification failed ({type(exc).__name__}); check host, credentials, and client API settings.")
+        return False
+
+
+def configure_clients(mode: str, upstream_config: pathlib.Path, log_dir: pathlib.Path) -> int:
     if not sys.stdin.isatty():
         print("Client configuration requires an interactive terminal.", file=sys.stderr)
         return 2
@@ -232,7 +247,7 @@ def configure_clients(mode: str, upstream_config: pathlib.Path) -> int:
             host = default_host(client, item["configs"])
         username = input("  Username (blank if not used): ").strip()
         password = getpass.getpass("  Password (input hidden; blank if not used): ")
-        existing[task_name] = {
+        task_conf = {
             "client": client,
             "host": host,
             "username": username,
@@ -240,7 +255,12 @@ def configure_clients(mode: str, upstream_config: pathlib.Path) -> int:
             "strategies": {},
             "delete_data": False,
         }
-        print(f"  Added task '{task_name}' (no removal strategy has been enabled).")
+        print("  Checking API login and basic client status (read-only)...")
+        if not verify_client_connection(task_name, task_conf, log_dir):
+            print("  Task was not saved because the API check failed.")
+            continue
+        existing[task_name] = task_conf
+        print(f"  Added verified task '{task_name}' (no removal strategy has been enabled).")
 
     try:
         rendered = yaml.safe_dump(existing, sort_keys=False, allow_unicode=True)
@@ -347,7 +367,7 @@ def main() -> int:
         print(json.dumps(detect_clients(args.mode), indent=2))
         return 0
     if args.command == "configure":
-        return configure_clients(args.mode, args.upstream_config)
+        return configure_clients(args.mode, args.upstream_config, args.log_dir)
     if args.command == "uninstall":
         script = pathlib.Path(__file__).resolve().parents[1] / "uninstall.sh"
         if not script.is_file():
