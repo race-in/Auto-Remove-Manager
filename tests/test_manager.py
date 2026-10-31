@@ -72,7 +72,7 @@ class ManagerTests(unittest.TestCase):
             home = pathlib.Path(tmp)
             feral_config = home / ".qbittorrent/qBittorrent/config/qBittorrent.conf"
             feral_config.parent.mkdir(parents=True)
-            feral_config.write_text("[Preferences]\\nWebUI\\\\Port=34021\\n", encoding="utf-8")
+            feral_config.write_text("[Preferences]\nWebUI\\Port=34021\n", encoding="utf-8")
             with mock.patch.object(manager, "homes_to_scan", return_value=[home]):
                 configs = manager.config_inventory("rootless")
             qb_configs = [item for item in configs if item["client"] == "qbittorrent"]
@@ -94,7 +94,7 @@ class ManagerTests(unittest.TestCase):
             home = pathlib.Path(tmp)
             core = home / ".config/deluge/core.conf"
             core.parent.mkdir(parents=True)
-            core.write_text('{"daemon_port": 28602, "allow_remote": true}\\n', encoding="utf-8")
+            core.write_text('{"daemon_port": 28602, "allow_remote": true}\n', encoding="utf-8")
             with mock.patch.object(manager, "homes_to_scan", return_value=[home]):
                 configs = manager.config_inventory("rootless")
             deluge_configs = [item for item in configs if item["client"] == "deluge"]
@@ -105,7 +105,7 @@ class ManagerTests(unittest.TestCase):
     def test_deluge_port_falls_back_when_core_conf_has_no_valid_port(self):
         with tempfile.TemporaryDirectory() as tmp:
             core = pathlib.Path(tmp) / "core.conf"
-            core.write_text('{"daemon_port": 70000}\\n', encoding="utf-8")
+            core.write_text('{"daemon_port": 70000}\n', encoding="utf-8")
             self.assertEqual(manager.read_deluge_port([{"client": "deluge", "path": str(core)}]), 58846)
 
     def test_qbittorrent_port_is_detected_from_config(self):
