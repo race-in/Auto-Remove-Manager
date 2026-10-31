@@ -138,6 +138,8 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
             ("qbittorrent", home / ".qbittorrent/qBittorrent/config/qBittorrent.conf"),
             ("qbittorrent", home / ".var/app/org.qbittorrent.qBittorrent/config/qBittorrent/qBittorrent.conf"),
             ("deluge", home / ".config/deluge/auth"),
+            # Feral uses the standard Deluge profile directory for core settings.
+            ("deluge", home / ".config/deluge/core.conf"),
             ("transmission", home / ".config/transmission-daemon/settings.json"),
             ("transmission", home / ".var/app/com.transmissionbt.Transmission/config/transmission-daemon/settings.json"),
             ("utorrent", home / ".config/utserver/utserver.conf"),
@@ -266,6 +268,35 @@ def read_qbittorrent_port(configs: list[dict[str, str]]) -> int:
     return 8080
 
 
+def read_deluge_port(configs: list[dict[str, str]]) -> int:
+    """Read Deluge's daemon RPC port from a discovered core.conf."""
+    for item in configs:
+        if item.get("client") != "deluge" or not item.get("path", "").endswith("core.conf"):
+            continue
+        try:
+            raw = pathlib.Path(item["path"]).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        try:
+            parsed = yaml.safe_load(raw)
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, dict):
+            value = parsed.get("daemon_port")
+            try:
+                port = int(value)
+            except (TypeError, ValueError):
+                port = 0
+            if 1 <= port <= 65535:
+                return port
+        match = re.search(r'["\\']?daemon_port["\\']?\\s*:\\s*(\\d+)', raw)
+        if match:
+            port = int(match.group(1))
+            if 1 <= port <= 65535:
+                return port
+    return 58846
+
+
 def qbittorrent_login_response_succeeded(status_code: int, response_text: str) -> bool:
     """Recognize qBittorrent's legacy and v5.2+ successful login responses."""
     if status_code == 204:
@@ -318,7 +349,7 @@ def default_host(client: str, configs: list[dict[str, str]]) -> str:
             return ""
         return f"http://127.0.0.1:{read_qbittorrent_port(configs)}"
     if client == "deluge":
-        return "127.0.0.1:58846"
+        return f"127.0.0.1:{read_deluge_port(configs)}"
     if client == "transmission":
         return "http://127.0.0.1:9091"
     if client == "utorrent":
