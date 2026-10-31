@@ -338,8 +338,14 @@ EOF
 fi
 
 ok "$APP_NAME installed in $MODE mode."
-info "Run: $BIN_DIR/autoremove-manager detect"
-info "Configure clients: $BIN_DIR/autoremove-manager configure"
+info "Scanning locally installed torrent clients..."
+"$BIN_DIR/autoremove-manager" detect || warn "Client discovery returned an error; inspect the installation and try again."
+if [[ -t 0 ]]; then
+  read -r -p "Configure detected supported clients now? [Y/n] " configure_now
+  if [[ ! "$configure_now" =~ ^[Nn]$ ]]; then
+    "$BIN_DIR/autoremove-manager" configure || warn "One or more client configurations were not saved. You can retry with the configure command."
+  fi
+fi
 info "Review proposed removals: $BIN_DIR/autoremove-manager preview"
 warn "Actual torrent removal is disabled. Downloaded-data deletion is also disabled."
 warn "Uninstall with: $BIN_DIR/autoremove-manager uninstall"
