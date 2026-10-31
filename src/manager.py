@@ -339,6 +339,8 @@ def main() -> int:
     parser.add_argument("--log-dir", type=pathlib.Path, required=True)
     parser.add_argument("--confirm-removal", action="store_true",
                         help="required in addition to allow_removal=true for manual deletion runs")
+    parser.add_argument("--yes", action="store_true",
+                        help="skip the interactive confirmation in the one-click uninstaller")
     parser.add_argument("command", nargs="?", default="status",
                         choices=("status", "detect", "configure", "test", "preview",
                                  "scheduled", "run", "logs", "uninstall"))
@@ -373,7 +375,10 @@ def main() -> int:
         if not script.is_file():
             print("Uninstaller is missing. Run the standalone uninstall.sh script.", file=sys.stderr)
             return 1
-        return subprocess.run(["bash", str(script), "--mode", args.mode], check=False).returncode
+        command = ["bash", str(script), "--mode", args.mode]
+        if args.yes:
+            command.append("--yes")
+        return subprocess.run(command, check=False).returncode
     if args.command == "logs":
         print(args.log_dir)
         if args.log_dir.exists():
@@ -381,6 +386,9 @@ def main() -> int:
                 print(f"{path.name}\t{path.stat().st_size} bytes")
         return 0
 
+    if args.command == "scheduled" and not bool(settings.get("schedule", {}).get("enabled", False)):
+        print("Scheduled runs are disabled in manager.json.")
+        return 0
     if not tasks:
         print("No client tasks configured. Run 'autoremove-manager detect' then 'autoremove-manager configure'.")
         return 0
