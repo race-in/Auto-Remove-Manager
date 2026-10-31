@@ -82,12 +82,19 @@ if ((YES == 0)); then
   [[ "$answer" == "REMOVE" ]] || { echo "Cancelled."; exit 0; }
 fi
 
+service_path="$UNIT_DIR/auto-remove-manager.service"
+timer_path="$UNIT_DIR/auto-remove-manager.timer"
+service_owned=0
+timer_owned=0
+if [[ -f "$service_path" ]] && grep -Fq "$MARKER" "$service_path"; then service_owned=1; fi
+if [[ -f "$timer_path" ]] && grep -Fq "$MARKER" "$timer_path"; then timer_owned=1; fi
+
 if [[ "$MODE" == root ]]; then
-  systemctl disable --now auto-remove-manager.timer >/dev/null 2>&1 || true
-  systemctl stop auto-remove-manager.service >/dev/null 2>&1 || true
+  if ((timer_owned)); then systemctl disable --now auto-remove-manager.timer >/dev/null 2>&1 || true; fi
+  if ((service_owned)); then systemctl stop auto-remove-manager.service >/dev/null 2>&1 || true; fi
 else
-  systemctl --user disable --now auto-remove-manager.timer >/dev/null 2>&1 || true
-  systemctl --user stop auto-remove-manager.service >/dev/null 2>&1 || true
+  if ((timer_owned)); then systemctl --user disable --now auto-remove-manager.timer >/dev/null 2>&1 || true; fi
+  if ((service_owned)); then systemctl --user stop auto-remove-manager.service >/dev/null 2>&1 || true; fi
 fi
 
 for unit in auto-remove-manager.service auto-remove-manager.timer; do
