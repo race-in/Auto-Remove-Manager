@@ -17,7 +17,7 @@ Two separate installation modes are supported:
 Run as root or with sudo:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh) --mode root
+curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh | sudo bash -s -- --mode root
 ```
 
 ### Rootless mode
@@ -28,7 +28,7 @@ Run as the torrent-client owner. Do not use sudo:
 bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh) --mode rootless
 ```
 
-The interactive installer can also select the mode:
+When already logged in as root, omit `sudo` and use `bash` instead. For the interactive selector, run the script from a terminal with stdin attached:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh)
