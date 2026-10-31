@@ -134,6 +134,8 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
         candidates = [
             ("qbittorrent", home / ".config/qBittorrent/qBittorrent.conf"),
             ("qbittorrent", home / ".config/qBittorrent/config/qBittorrent.conf"),
+            # Feral Hosting stores qBittorrent settings outside XDG_CONFIG_HOME.
+            ("qbittorrent", home / ".qbittorrent/qBittorrent/config/qBittorrent.conf"),
             ("qbittorrent", home / ".var/app/org.qbittorrent.qBittorrent/config/qBittorrent/qBittorrent.conf"),
             ("deluge", home / ".config/deluge/auth"),
             ("transmission", home / ".config/transmission-daemon/settings.json"),
@@ -296,8 +298,24 @@ def upstream_login_compatibility(client: str):
         yield
 
 
+def is_feral_qbittorrent_config(configs: list[dict[str, str]]) -> bool:
+    """Return True when discovery found Feral's non-XDG qBittorrent config."""
+    return any(
+        pathlib.Path(item.get("path", "")).as_posix().endswith(
+            "/.qbittorrent/qBittorrent/config/qBittorrent.conf"
+        )
+        for item in configs
+        if item.get("client") == "qbittorrent"
+    )
+
+
 def default_host(client: str, configs: list[dict[str, str]]) -> str:
     if client == "qbittorrent":
+        # On Feral, the configured port may belong to an isolated client
+        # container and is not necessarily reachable on the user's loopback.
+        # Require an explicitly supplied, API-verified endpoint instead.
+        if is_feral_qbittorrent_config(configs):
+            return ""
         return f"http://127.0.0.1:{read_qbittorrent_port(configs)}"
     if client == "deluge":
         return "127.0.0.1:58846"
@@ -365,9 +383,16 @@ def configure_clients(mode: str, upstream_config: pathlib.Path, log_dir: pathlib
             while task_name in existing:
                 suffix += 1
                 task_name = f"{client}_{suffix}"
-        host = input(f"  API/RPC host [{default_host(client, item['configs'])}]: ").strip()
+        suggested_host = default_host(client, item["configs"])
+        if suggested_host:
+            host = input(f"  API/RPC host [{suggested_host}]: ").strip() or suggested_host
+        else:
+            print("  Feral qBittorrent may expose its WebUI through a provider-managed proxy.")
+            print("  The port in its config may not be reachable on 127.0.0.1; use the provider's reachable API endpoint.")
+            host = input("  API/RPC host (required): ").strip()
         if not host:
-            host = default_host(client, item["configs"])
+            print("  No endpoint entered; task was not saved.")
+            continue
         username = input("  Username (blank if not used): ").strip()
         password = getpass.getpass("  Password (input hidden; blank if not used): ")
         task_conf = {
