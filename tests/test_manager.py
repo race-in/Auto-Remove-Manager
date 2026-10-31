@@ -37,8 +37,8 @@ class ManagerTests(unittest.TestCase):
         with mock.patch.object(manager, "process_inventory", return_value=[
             {"user": "seed", "command": "rtorrent", "args": "rtorrent"}
         ]), mock.patch.object(manager, "service_inventory", return_value=[]), mock.patch.object(
-            manager, "config_inventory", return_value=[]
-        ):
+            manager, "package_inventory", return_value=[]
+        ), mock.patch.object(manager, "config_inventory", return_value=[]):
             found = manager.detect_clients("root")
         rtorrent = found["detection_only"][0]
         self.assertTrue(rtorrent["detected"])
