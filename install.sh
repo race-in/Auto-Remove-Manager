@@ -343,7 +343,15 @@ info "Scanning locally installed torrent clients..."
 if [[ -t 0 ]]; then
   read -r -p "Configure detected supported clients now? [Y/n] " configure_now
   if [[ ! "$configure_now" =~ ^[Nn]$ ]]; then
-    "$BIN_DIR/autoremove-manager" configure || warn "One or more client configurations were not saved. You can retry with the configure command."
+    if [[ "$MODE" == root && "$RUN_USER" != "root" ]]; then
+      if has runuser; then
+        runuser -u "$RUN_USER" -- env HOME="$RUN_HOME" "$BIN_DIR/autoremove-manager" configure || warn "One or more client configurations were not saved. Retry as $RUN_USER."
+      else
+        warn "Could not switch to $RUN_USER safely. Run '$BIN_DIR/autoremove-manager configure' as $RUN_USER (without sudo)."
+      fi
+    else
+      "$BIN_DIR/autoremove-manager" configure || warn "One or more client configurations were not saved. You can retry with the configure command."
+    fi
   fi
 fi
 info "Review proposed removals: $BIN_DIR/autoremove-manager preview"
