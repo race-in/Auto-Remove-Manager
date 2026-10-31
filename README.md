@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/
 
 ## Features
 
-- Detects supported clients using running processes, installed packages (dpkg/rpm/pacman/apk), systemd service/unit files, and common per-user or system-wide configuration paths.
+- Detects supported clients using running processes, installed packages (dpkg/rpm/pacman/apk), systemd service/unit files, and common per-user or system-wide configuration paths. Includes Feral-specific qBittorrent and Deluge config discovery.
 - Supports qBittorrent, Deluge, Transmission, and µTorrent through upstream adapters.
 - Reports rTorrent if detected, but does not create an rTorrent task because the upstream engine has no rTorrent adapter.
 - Tests client authentication and reads basic client status before saving a task.
@@ -134,7 +134,7 @@ The uninstaller uses ownership markers and removes only the exact manager-owned 
 | µTorrent | Process, systemd, common config | Yes | Web API |
 | rTorrent | Process and systemd | No | Report only |
 
-See [Supported Clients](docs/SUPPORTED_CLIENTS.md) and [Troubleshooting](docs/TROUBLESHOOTING.md).
+See [Supported Clients](docs/SUPPORTED_CLIENTS.md), [Feral Hosting](docs/FERAL.md), and [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## Safety model
 
