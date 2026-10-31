@@ -78,7 +78,7 @@ else
 fi
 
 if ! has python3 || ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3,8))'; then
-  if [[ "$MODE" == root && -f /etc/debian_version && has apt-get ]]; then
+  if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
     info "Installing required Debian/Ubuntu packages (no system upgrade)."
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
@@ -170,7 +170,7 @@ EOF
 chmod 755 "$BIN_DIR/autoremove-manager"
 
 if [[ "$MODE" == root ]]; then
-  chown -R "$RUN_USER":"$(id -gn "$RUN_USER")" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
+  chown -R "$RUN_USER":"$(id -gn "$RUN_USER")" "$BASE" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
   chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$BIN_DIR/autoremove-manager"
   cat > "$UNIT_DIR/auto-remove-manager.service" <<EOF
 # $MARKER
@@ -212,7 +212,7 @@ EOF
     warn "systemd is unavailable; schedule the preview command with root's crontab."
   fi
 else
-  chown -R "$RUN_USER":"$(id -gn "$RUN_USER")" "$BASE" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$BIN_DIR"
+  # Rootless mode already owns every created path; never invoke chown here.
   cat > "$UNIT_DIR/auto-remove-manager.service" <<EOF
 # $MARKER
 [Unit]
