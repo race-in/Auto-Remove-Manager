@@ -134,6 +134,8 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
             ("transmission", home / ".var/app/com.transmissionbt.Transmission/config/transmission-daemon/settings.json"),
             ("utorrent", home / ".config/utserver/utserver.conf"),
             ("utorrent", home / ".utserver.conf"),
+            ("rtorrent", home / ".rtorrent.rc"),
+            ("rtorrent", home / ".config/rtorrent/rtorrent.rc"),
         ]
         for client, path in candidates:
             try:
@@ -145,6 +147,7 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
         ("transmission", pathlib.Path("/etc/transmission-daemon/settings.json")),
         ("transmission", pathlib.Path("/var/lib/transmission-daemon/info/settings.json")),
         ("transmission", pathlib.Path("/var/lib/transmission/.config/transmission-daemon/settings.json")),
+        ("rtorrent", pathlib.Path("/etc/rtorrent.rc")),
     ):
         try:
             if path.is_file():
@@ -199,15 +202,18 @@ def detect_clients(mode: str) -> dict[str, Any]:
             if item["command"].lower() in {name.lower() for name in names}
             or any(re.search(r"(^|[/ ])" + re.escape(name) + r"([ /]|$)", item["args"], re.I) for name in names)
         ]
-        service_hits = [unit for unit in services if "rtorrent" in unit.lower()]
-        config_hits = []
+        service_hits = [unit for unit in services if any(name in unit.lower() for name in names)]
+        package_hits = [package for package in packages if any(package == name or package.startswith(name + ":") for name in names)]
+        config_hits = [entry for entry in configs if entry["client"] == client]
+        detected = bool(process_hits or service_hits or package_hits or config_hits)
         result["detection_only"].append({
             "client": client,
-            "detected": bool(process_hits or service_hits or config_hits),
+            "detected": detected,
             "processes": process_hits,
             "services": service_hits,
+            "packages": package_hits,
             "configs": config_hits,
-            "status": "detected_but_no_upstream_adapter" if (process_hits or service_hits) else "not_detected",
+            "status": "detected_but_no_upstream_adapter" if detected else "not_detected",
         })
     return result
 
