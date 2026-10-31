@@ -158,6 +158,7 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   fi
 fi
 
+export PIP_NO_CACHE_DIR=1
 "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
 "$VENV/bin/python" -m pip install --disable-pip-version-check -r "$BASE/requirements.txt"
 
