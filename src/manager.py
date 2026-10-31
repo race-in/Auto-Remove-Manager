@@ -425,7 +425,35 @@ def invoke_upstream(args: argparse.Namespace, preview: bool) -> int:
         print("autoremove-torrents executable not found in PATH.", file=sys.stderr)
         return 127
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    command = [executable, "--conf", str(args.upstream_config), "--log", str(args.log_dir)]
+    # Run the upstream console script under this interpreter with the qBittorrent
+    # login compatibility patch active in the child process too. A patch applied
+    # during configure/test cannot affect the separate upstream CLI process.
+    bootstrap = """
+import runpy
+import sys
+from unittest.mock import patch
+from autoremovetorrents.client.qbittorrent import qBittorrent
+from autoremovetorrents.exception.connectionfailure import ConnectionFailure
+from autoremovetorrents.exception.loginfailure import LoginFailure
+
+def compatible_login(self, username, password):
+    try:
+        response = self._request_handler.login(username, password)
+    except Exception as exc:
+        raise ConnectionFailure(str(exc))
+    if response.status_code == 204:
+        return
+    if response.status_code == 200 and response.text.strip() != "Fails.":
+        return
+    raise LoginFailure("The server returned HTTP %d or rejected the credentials." % response.status_code)
+
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+with patch.object(qBittorrent, "login", compatible_login):
+    runpy.run_path(script, run_name="__main__")
+"""
+    command = [sys.executable, "-c", bootstrap, executable,
+               "--conf", str(args.upstream_config), "--log", str(args.log_dir)]
     if preview:
         command.append("--view")
     print("Running upstream AutoRemove Torrents in " + ("PREVIEW" if preview else "REMOVAL") + " mode.")
