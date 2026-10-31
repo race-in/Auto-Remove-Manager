@@ -1,0 +1,3 @@
+autoremove-torrents==1.5.5
+PyYAML>=6.0
+requests>=2.31
