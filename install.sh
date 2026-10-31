@@ -88,7 +88,7 @@ if ! has python3 || ! python3 -c 'import sys; raise SystemExit(sys.version_info 
   fi
 fi
 has git || {
-  if [[ "$MODE" == root && -f /etc/debian_version && has apt-get ]]; then
+  if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends git ca-certificates
