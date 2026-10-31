@@ -76,7 +76,7 @@ class ManagerTests(unittest.TestCase):
     def test_qbittorrent_port_is_detected_from_modern_webui_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = pathlib.Path(tmp) / "qBittorrent.conf"
-            config.write_text("[Preferences]\\nDownloads\\SavePath=/data\\n[WebUI]\\nPort=9001\\n", encoding="utf-8")
+            config.write_text("[Preferences]\nDownloads\\SavePath=/data\n[WebUI]\nPort=9001\n", encoding="utf-8")
             self.assertEqual(manager.read_qbittorrent_port([{"path": str(config)}]), 9001)
 
     def test_qbittorrent_login_accepts_http_204(self):
