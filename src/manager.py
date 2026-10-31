@@ -315,29 +315,13 @@ def upstream_login_compatibility(client: str):
 
     from unittest.mock import patch
     from autoremovetorrents.client.qbittorrent import qBittorrent
-    from autoremovetorrents.exception.connectionfailure import ConnectionFailure
     from autoremovetorrents.exception.loginfailure import LoginFailure
 
-    def init_bounded_logger(log_path):
-    os.makedirs(log_path, exist_ok=True)
-    Logger.log_path = log_path
-    filename = Logger.LOG_FILE_NAME % datetime.now().strftime("%Y-%m-%d")
-    handler = logging.handlers.RotatingFileHandler(
-        os.path.join(log_path, filename), maxBytes=5 * 1024 * 1024,
-        backupCount=1, encoding="utf-8"
-    )
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter(Logger.FILE_FORMAT, datefmt=Logger.DATE_FORMAT))
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter(Logger.OUTPUT_FORMAT, datefmt=Logger.DATE_FORMAT))
-    Logger.file_handler = handler
-    Logger.console_handler = console
-
-def compatible_login(self, username, password):
+    def compatible_login(self, username, password):
         try:
             response = self._request_handler.login(username, password)
         except Exception as exc:
+            from autoremovetorrents.exception.connectionfailure import ConnectionFailure
             raise ConnectionFailure(str(exc))
         if qbittorrent_login_response_succeeded(response.status_code, response.text):
             return
@@ -345,7 +329,6 @@ def compatible_login(self, username, password):
 
     with patch.object(qBittorrent, "login", compatible_login):
         yield
-
 
 def is_feral_qbittorrent_config(configs: list[dict[str, str]]) -> bool:
     """Return True when discovery found Feral's non-XDG qBittorrent config."""
@@ -542,6 +525,22 @@ from autoremovetorrents.logger import Logger
 from autoremovetorrents.client.qbittorrent import qBittorrent
 from autoremovetorrents.exception.connectionfailure import ConnectionFailure
 from autoremovetorrents.exception.loginfailure import LoginFailure
+
+def init_bounded_logger(log_path):
+    os.makedirs(log_path, exist_ok=True)
+    Logger.log_path = log_path
+    filename = Logger.LOG_FILE_NAME % datetime.now().strftime("%Y-%m-%d")
+    handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_path, filename), maxBytes=5 * 1024 * 1024,
+        backupCount=1, encoding="utf-8"
+    )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(Logger.FILE_FORMAT, datefmt=Logger.DATE_FORMAT))
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(Logger.OUTPUT_FORMAT, datefmt=Logger.DATE_FORMAT))
+    Logger.file_handler = handler
+    Logger.console_handler = console
 
 def compatible_login(self, username, password):
     try:
