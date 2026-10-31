@@ -89,6 +89,25 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(manager.is_feral_qbittorrent_config(configs))
         self.assertEqual(manager.default_host("qbittorrent", configs), "")
 
+    def test_feral_deluge_core_conf_is_discovered_and_rpc_port_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            core = home / ".config/deluge/core.conf"
+            core.parent.mkdir(parents=True)
+            core.write_text('{"daemon_port": 28602, "allow_remote": true}\\n', encoding="utf-8")
+            with mock.patch.object(manager, "homes_to_scan", return_value=[home]):
+                configs = manager.config_inventory("rootless")
+            deluge_configs = [item for item in configs if item["client"] == "deluge"]
+            self.assertEqual(len(deluge_configs), 1)
+            self.assertEqual(manager.read_deluge_port(deluge_configs), 28602)
+            self.assertEqual(manager.default_host("deluge", deluge_configs), "127.0.0.1:28602")
+
+    def test_deluge_port_falls_back_when_core_conf_has_no_valid_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            core = pathlib.Path(tmp) / "core.conf"
+            core.write_text('{"daemon_port": 70000}\\n', encoding="utf-8")
+            self.assertEqual(manager.read_deluge_port([{"client": "deluge", "path": str(core)}]), 58846)
+
     def test_qbittorrent_port_is_detected_from_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = pathlib.Path(tmp) / "qBittorrent.conf"
