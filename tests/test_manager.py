@@ -137,6 +137,21 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(manager.default_host("transmission", []), "http://127.0.0.1:9091")
         self.assertEqual(manager.default_host("utorrent", []), "http://127.0.0.1:8080")
 
+    def test_upstream_log_rotation_is_limited_to_five_mib_and_one_backup(self):
+        from autoremovetorrents.logger import Logger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager.init_upstream_logger(tmp)
+            handler = Logger.file_handler
+            try:
+                self.assertIsInstance(handler, manager.logging.handlers.RotatingFileHandler)
+                self.assertEqual(handler.maxBytes, 5 * 1024 * 1024)
+                self.assertEqual(handler.backupCount, 1)
+                self.assertTrue(pathlib.Path(tmp, handler.baseFilename.split("/")[-1]).parent.exists())
+            finally:
+                handler.close()
+                Logger.console_handler.close()
+
     def test_atomic_write_sets_private_permissions(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = pathlib.Path(tmp) / "secret.yml"
