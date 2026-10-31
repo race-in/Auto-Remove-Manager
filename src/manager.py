@@ -6,6 +6,8 @@ import argparse
 from contextlib import contextmanager
 import getpass
 import json
+import logging
+import logging.handlers
 import os
 import pathlib
 import pwd
@@ -316,7 +318,23 @@ def upstream_login_compatibility(client: str):
     from autoremovetorrents.exception.connectionfailure import ConnectionFailure
     from autoremovetorrents.exception.loginfailure import LoginFailure
 
-    def compatible_login(self, username, password):
+    def init_bounded_logger(log_path):
+    os.makedirs(log_path, exist_ok=True)
+    Logger.log_path = log_path
+    filename = Logger.LOG_FILE_NAME % datetime.now().strftime("%Y-%m-%d")
+    handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_path, filename), maxBytes=5 * 1024 * 1024,
+        backupCount=1, encoding="utf-8"
+    )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(Logger.FILE_FORMAT, datefmt=Logger.DATE_FORMAT))
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(Logger.OUTPUT_FORMAT, datefmt=Logger.DATE_FORMAT))
+    Logger.file_handler = handler
+    Logger.console_handler = console
+
+def compatible_login(self, username, password):
         try:
             response = self._request_handler.login(username, password)
         except Exception as exc:
@@ -357,13 +375,41 @@ def default_host(client: str, configs: list[dict[str, str]]) -> str:
     raise ValueError(f"Unsupported client: {client}")
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 1
+
+
+def init_upstream_logger(log_path: str, file_debug_log: bool = False,
+                         output_debug_log: bool = False) -> None:
+    """Initialize upstream ART logging with a bounded 5 MiB rotating file."""
+    from autoremovetorrents.logger import Logger
+
+    pathlib.Path(log_path).mkdir(parents=True, exist_ok=True)
+    Logger.log_path = log_path
+    filename = Logger.LOG_FILE_NAME % __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    file_handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_path, filename),
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG if file_debug_log else logging.INFO)
+    file_handler.setFormatter(logging.Formatter(Logger.FILE_FORMAT, datefmt=Logger.DATE_FORMAT))
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if output_debug_log else logging.INFO)
+    console_handler.setFormatter(logging.Formatter(Logger.OUTPUT_FORMAT, datefmt=Logger.DATE_FORMAT))
+
+    Logger.file_handler = file_handler
+    Logger.console_handler = console_handler
+
+
 def verify_client_connection(task_name: str, task_conf: dict[str, Any], log_dir: pathlib.Path) -> bool:
     """Authenticate and read basic client state without listing or removing torrents."""
     try:
-        from autoremovetorrents.logger import Logger
         from autoremovetorrents.task import Task
         log_dir.mkdir(parents=True, exist_ok=True)
-        Logger.init(str(log_dir))
+        init_upstream_logger(str(log_dir))
         with upstream_login_compatibility(str(task_conf.get("client", "")).lower()):
             task = Task(task_name, task_conf, remove_torrents=False)
             task._login()
@@ -485,9 +531,14 @@ def invoke_upstream(args: argparse.Namespace, preview: bool) -> int:
     # login compatibility patch active in the child process too. A patch applied
     # during configure/test cannot affect the separate upstream CLI process.
     bootstrap = """
+import logging
+import logging.handlers
+import os
 import runpy
 import sys
+from datetime import datetime
 from unittest.mock import patch
+from autoremovetorrents.logger import Logger
 from autoremovetorrents.client.qbittorrent import qBittorrent
 from autoremovetorrents.exception.connectionfailure import ConnectionFailure
 from autoremovetorrents.exception.loginfailure import LoginFailure
@@ -505,6 +556,8 @@ def compatible_login(self, username, password):
 
 script = sys.argv[1]
 sys.argv = [script] + sys.argv[2:]
+log_dir = sys.argv[sys.argv.index("--log") + 1]
+init_bounded_logger(log_dir)
 with patch.object(qBittorrent, "login", compatible_login):
     runpy.run_path(script, run_name="__main__")
 """
@@ -594,10 +647,9 @@ def main() -> int:
             print("No configured client tasks. Run 'autoremove-manager configure' first.")
             return 0
         try:
-            from autoremovetorrents.logger import Logger
             from autoremovetorrents.task import Task
             args.log_dir.mkdir(parents=True, exist_ok=True)
-            Logger.init(str(args.log_dir))
+            init_upstream_logger(str(args.log_dir))
         except Exception as exc:
             print(f"Unable to initialize upstream client test: {type(exc).__name__}", file=sys.stderr)
             return 1
