@@ -380,6 +380,32 @@ def main() -> int:
         return 0
     if args.command == "configure":
         return configure_clients(args.mode, args.upstream_config, args.log_dir)
+    if args.command == "test":
+        if not tasks:
+            print("No configured client tasks. Run 'autoremove-manager configure' first.")
+            return 0
+        try:
+            from autoremovetorrents.logger import Logger
+            from autoremovetorrents.task import Task
+            args.log_dir.mkdir(parents=True, exist_ok=True)
+            Logger.init(str(args.log_dir))
+        except Exception as exc:
+            print(f"Unable to initialize upstream client test: {type(exc).__name__}", file=sys.stderr)
+            return 1
+        failures = 0
+        for task_name, task_conf in tasks.items():
+            if not isinstance(task_conf, dict):
+                print(f"{task_name}: invalid task configuration.")
+                failures += 1
+                continue
+            try:
+                task = Task(task_name, task_conf, remove_torrents=False)
+                task._login()
+                print(f"{task_name}: API connection successful (read-only test).")
+            except Exception as exc:
+                print(f"{task_name}: API connection failed ({type(exc).__name__}).")
+                failures += 1
+        return 1 if failures else 0
     if args.command == "logs":
         print(args.log_dir)
         if args.log_dir.exists():
