@@ -96,8 +96,6 @@ has git || {
     die "git is required. Install it, then rerun."
   fi
 }
-python3 -m venv --help >/dev/null 2>&1 || die "python3-venv is required."
-
 mkdir -p "$(dirname "$BASE")"
 if [[ -e "$BASE" ]]; then
   [[ -d "$BASE/.git" ]] || die "Refusing to overwrite non-Git path: $BASE"
@@ -120,7 +118,16 @@ done
 
 VENV="$BASE/venv"
 if [[ ! -x "$VENV/bin/python" ]]; then
-  python3 -m venv "$VENV"
+  if ! python3 -m venv "$VENV"; then
+    if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y --no-install-recommends python3-venv
+      python3 -m venv "$VENV" || die "Unable to create the Python virtual environment."
+    else
+      die "Unable to create a virtual environment. Install python3-venv, then rerun."
+    fi
+  fi
 fi
 "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
 "$VENV/bin/python" -m pip install --disable-pip-version-check "autoremove-torrents==1.5.5" PyYAML requests
@@ -154,6 +161,8 @@ if [[ ! -f "$CONFIG_DIR/config.yml" ]]; then
   printf '{}\n' > "$CONFIG_DIR/config.yml"
   chmod 600 "$CONFIG_DIR/config.yml"
 fi
+printf '%s\n' "$RUN_USER" > "$CONFIG_DIR/owner"
+chmod 600 "$CONFIG_DIR/owner"
 
 cat > "$BIN_DIR/autoremove-manager" <<EOF
 #!/usr/bin/env bash
@@ -204,12 +213,142 @@ Unit=auto-remove-manager.service
 [Install]
 WantedBy=timers.target
 EOF
-  if has systemctl; then
+  if has systemctl && [[ -d /run/systemd/system ]]; then
     systemctl daemon-reload
     systemctl enable --now auto-remove-manager.timer
     ok "System timer enabled (preview mode)."
+  elif has crontab; then
+    cron_tmp="$(mktemp)"
+    cron_clean="$(mktemp)"
+    crontab -u "$RUN_USER" -l > "$cron_tmp" 2>/dev/null || true
+    grep -v '# AUTO-REMOVE-MANAGER
+else
+  # Rootless mode already owns every created path; never invoke chown here.
+  cat > "$UNIT_DIR/auto-remove-manager.service" <<EOF
+# $MARKER
+[Unit]
+Description=Auto-Remove-Manager scheduled preview
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=$RUN_HOME
+ExecStart=$BIN_DIR/autoremove-manager scheduled
+NoNewPrivileges=true
+PrivateTmp=true
+EOF
+  cat > "$UNIT_DIR/auto-remove-manager.timer" <<'EOF'
+# AUTO-REMOVE-MANAGER-OWNED-V1
+[Unit]
+Description=Run Auto-Remove-Manager every hour
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=60m
+Persistent=true
+Unit=auto-remove-manager.service
+
+[Install]
+WantedBy=default.target
+EOF
+  if has systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+    systemctl --user daemon-reload
+    systemctl --user enable --now auto-remove-manager.timer
+    ok "User systemd timer enabled (preview mode)."
+  elif has crontab; then
+    cron_tmp="$(mktemp)"
+    cron_clean="$(mktemp)"
+    crontab -l > "$cron_tmp" 2>/dev/null || true
+    grep -v '# AUTO-REMOVE-MANAGER
   else
-    warn "systemd is unavailable; schedule the preview command with root's crontab."
+    warn "No user systemd or crontab found; scheduler is not enabled."
+  fi
+fi
+
+ok "$APP_NAME installed in $MODE mode."
+info "Run: $BIN_DIR/autoremove-manager detect"
+info "Configure clients: $BIN_DIR/autoremove-manager configure"
+info "Review proposed removals: $BIN_DIR/autoremove-manager preview"
+warn "Actual torrent removal is disabled. Downloaded-data deletion is also disabled."
+warn "Uninstall with: $BIN_DIR/autoremove-manager uninstall"
+ "$cron_tmp" > "$cron_clean" || true
+    printf '0 * * * * %s scheduled # AUTO-REMOVE-MANAGER\n' "$BIN_DIR/autoremove-manager" >> "$cron_clean"
+    crontab -u "$RUN_USER" "$cron_clean"
+    rm -f "$cron_tmp" "$cron_clean"
+    warn "systemd is unavailable; installed a marked preview cron job for $RUN_USER."
+  else
+    warn "Neither systemd nor crontab is available; scheduling is disabled."
+  fi
+else
+  # Rootless mode already owns every created path; never invoke chown here.
+  cat > "$UNIT_DIR/auto-remove-manager.service" <<EOF
+# $MARKER
+[Unit]
+Description=Auto-Remove-Manager scheduled preview
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=$RUN_HOME
+ExecStart=$BIN_DIR/autoremove-manager scheduled
+NoNewPrivileges=true
+PrivateTmp=true
+EOF
+  cat > "$UNIT_DIR/auto-remove-manager.timer" <<'EOF'
+# AUTO-REMOVE-MANAGER-OWNED-V1
+[Unit]
+Description=Run Auto-Remove-Manager every hour
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=60m
+Persistent=true
+Unit=auto-remove-manager.service
+
+[Install]
+WantedBy=default.target
+EOF
+  if has systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+    systemctl --user daemon-reload
+    systemctl --user enable --now auto-remove-manager.timer
+    ok "User systemd timer enabled (preview mode)."
+  elif has crontab; then
+    (crontab -l 2>/dev/null | grep -v '# AUTO-REMOVE-MANAGER'; printf '0 * * * * %s scheduled # AUTO-REMOVE-MANAGER\n' "$BIN_DIR/autoremove-manager") | crontab -
+    warn "User systemd is unavailable; installed a per-user hourly preview cron job."
+  else
+    warn "No user systemd or crontab found; scheduler is not enabled."
+  fi
+fi
+
+ok "$APP_NAME installed in $MODE mode."
+info "Run: $BIN_DIR/autoremove-manager detect"
+info "Configure clients: $BIN_DIR/autoremove-manager configure"
+info "Review proposed removals: $BIN_DIR/autoremove-manager preview"
+warn "Actual torrent removal is disabled. Downloaded-data deletion is also disabled."
+warn "Uninstall with: $BIN_DIR/autoremove-manager uninstall"
+ "$cron_tmp" > "$cron_clean" || true
+    printf '0 * * * * %s scheduled # AUTO-REMOVE-MANAGER\n' "$BIN_DIR/autoremove-manager" >> "$cron_clean"
+    crontab "$cron_clean"
+    rm -f "$cron_tmp" "$cron_clean"
+    warn "User systemd is unavailable; installed a marked per-user hourly preview cron job."
+  else
+    warn "No user systemd or crontab found; scheduler is not enabled."
+  fi
+fi
+
+ok "$APP_NAME installed in $MODE mode."
+info "Run: $BIN_DIR/autoremove-manager detect"
+info "Configure clients: $BIN_DIR/autoremove-manager configure"
+info "Review proposed removals: $BIN_DIR/autoremove-manager preview"
+warn "Actual torrent removal is disabled. Downloaded-data deletion is also disabled."
+warn "Uninstall with: $BIN_DIR/autoremove-manager uninstall"
+ "$cron_tmp" > "$cron_clean" || true
+    printf '0 * * * * %s scheduled # AUTO-REMOVE-MANAGER\n' "$BIN_DIR/autoremove-manager" >> "$cron_clean"
+    crontab -u "$RUN_USER" "$cron_clean"
+    rm -f "$cron_tmp" "$cron_clean"
+    warn "systemd is unavailable; installed a marked preview cron job for $RUN_USER."
+  else
+    warn "Neither systemd nor crontab is available; scheduling is disabled."
   fi
 else
   # Rootless mode already owns every created path; never invoke chown here.
