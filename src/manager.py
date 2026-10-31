@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import getpass
 import json
 import os
@@ -232,17 +233,67 @@ def detect_clients(mode: str) -> dict[str, Any]:
 
 
 def read_qbittorrent_port(configs: list[dict[str, str]]) -> int:
+    """Read WebUI port from both modern [WebUI] and legacy Preferences keys."""
     for item in configs:
+        section = ""
         try:
-            for line in pathlib.Path(item["path"]).read_text(encoding="utf-8", errors="replace").splitlines():
-                match = re.match(r"\s*WebUI\\Port\s*=\s*(\d+)", line, re.I)
-                if match:
-                    port = int(match.group(1))
-                    if 1 <= port <= 65535:
-                        return port
+            lines = pathlib.Path(item["path"]).read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
         except OSError:
             continue
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped[1:-1].strip().lower()
+                continue
+            if "=" not in stripped:
+                continue
+            key, value = (part.strip() for part in stripped.split("=", 1))
+            if not (
+                (section == "webui" and key.lower() == "port")
+                or key.lower() == r"webui\port"
+            ):
+                continue
+            try:
+                port = int(value)
+            except ValueError:
+                continue
+            if 1 <= port <= 65535:
+                return port
     return 8080
+
+
+def qbittorrent_login_response_succeeded(status_code: int, response_text: str) -> bool:
+    """Recognize qBittorrent's legacy and v5.2+ successful login responses."""
+    if status_code == 204:
+        return True
+    return status_code == 200 and response_text.strip() != "Fails."
+
+
+@contextmanager
+def upstream_login_compatibility(client: str):
+    """Work around autoremove-torrents 1.5.5 rejecting qBittorrent's HTTP 204 login."""
+    if client != "qbittorrent":
+        yield
+        return
+
+    from unittest.mock import patch
+    from autoremovetorrents.client.qbittorrent import qBittorrent
+    from autoremovetorrents.exception.connectionfailure import ConnectionFailure
+    from autoremovetorrents.exception.loginfailure import LoginFailure
+
+    def compatible_login(self, username, password):
+        try:
+            response = self._request_handler.login(username, password)
+        except Exception as exc:
+            raise ConnectionFailure(str(exc))
+        if qbittorrent_login_response_succeeded(response.status_code, response.text):
+            return
+        raise LoginFailure("The server returned HTTP %d or rejected the credentials." % response.status_code)
+
+    with patch.object(qBittorrent, "login", compatible_login):
+        yield
 
 
 def default_host(client: str, configs: list[dict[str, str]]) -> str:
@@ -264,8 +315,9 @@ def verify_client_connection(task_name: str, task_conf: dict[str, Any], log_dir:
         from autoremovetorrents.task import Task
         log_dir.mkdir(parents=True, exist_ok=True)
         Logger.init(str(log_dir))
-        task = Task(task_name, task_conf, remove_torrents=False)
-        task._login()
+        with upstream_login_compatibility(str(task_conf.get("client", "")).lower()):
+            task = Task(task_name, task_conf, remove_torrents=False)
+            task._login()
         return True
     except Exception as exc:  # Never print exception text: adapters may include endpoint details.
         print(f"  API verification failed ({type(exc).__name__}); check host, credentials, and client API settings.")
@@ -472,8 +524,9 @@ def main() -> int:
                 failures += 1
                 continue
             try:
-                task = Task(task_name, task_conf, remove_torrents=False)
-                task._login()
+                with upstream_login_compatibility(str(task_conf.get("client", "")).lower()):
+                    task = Task(task_name, task_conf, remove_torrents=False)
+                    task._login()
                 print(f"{task_name}: API connection successful (read-only test).")
             except Exception as exc:
                 print(f"{task_name}: API connection failed ({type(exc).__name__}).")
