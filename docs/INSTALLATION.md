@@ -19,7 +19,10 @@ The system-wide layout is:
 - systemd unit/timer: `/etc/systemd/system/auto-remove-manager.*`
 
 When invoked through sudo, the invoking user owns the configuration/state paths
-and runs the service. When invoked directly as root, root owns the installation.
+and runs the service. Run `autoremove-manager detect/configure/test/preview` as
+that same normal user (without sudo), so generated credentials and YAML retain
+the correct ownership. When invoked directly as root, root owns the installation
+and runs the manager commands.
 
 ## Rootless / per-user
 
