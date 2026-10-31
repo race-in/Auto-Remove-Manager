@@ -67,6 +67,28 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(qb["processes"], [{"user": "seed", "command": "qbittorrent-nox"}])
         self.assertNotIn("secret", str(found))
 
+    def test_feral_qbittorrent_config_is_discovered_rootless(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            feral_config = home / ".qbittorrent/qBittorrent/config/qBittorrent.conf"
+            feral_config.parent.mkdir(parents=True)
+            feral_config.write_text("[Preferences]\\nWebUI\\\\Port=34021\\n", encoding="utf-8")
+            with mock.patch.object(manager, "homes_to_scan", return_value=[home]):
+                configs = manager.config_inventory("rootless")
+            qb_configs = [item for item in configs if item["client"] == "qbittorrent"]
+            self.assertEqual(len(qb_configs), 1)
+            self.assertEqual(pathlib.Path(qb_configs[0]["path"]), feral_config)
+            self.assertEqual(manager.read_qbittorrent_port(qb_configs), 34021)
+
+    def test_feral_qbittorrent_does_not_assume_loopback_webui(self):
+        configs = [{
+            "client": "qbittorrent",
+            "path": "/home/seed/.qbittorrent/qBittorrent/config/qBittorrent.conf",
+            "home": "/home/seed",
+        }]
+        self.assertTrue(manager.is_feral_qbittorrent_config(configs))
+        self.assertEqual(manager.default_host("qbittorrent", configs), "")
+
     def test_qbittorrent_port_is_detected_from_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = pathlib.Path(tmp) / "qBittorrent.conf"
