@@ -45,6 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/
 - Uses upstream strategy expressions; does not invent cleanup rules.
 - Runs an hourly preview schedule by default.
 - Protects against concurrent runs with a process lock.
+- Rotates upstream daily log files at 5 MiB and retains one backup.
 - Uses explicit deletion and payload-deletion safeguards.
 - One-click uninstall removes manager-owned files, configuration, credentials, logs, virtual environment, service/timer and marked cron entry.
 
