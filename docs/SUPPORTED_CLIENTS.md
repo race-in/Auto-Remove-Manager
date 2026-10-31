@@ -16,5 +16,11 @@ manager must not generate an rTorrent task or claim it is supported. A future
 adapter would need independent API coverage and tests before being enabled.
 
 The current discovery layer is Linux-focused and targets Debian/Ubuntu
-seedboxes. Client API endpoints, authentication, and compatibility must be
-verified by the upstream client adapter at runtime.
+seedboxes. It inspects visible processes, systemd services and installed unit
+files, Debian package records, and common per-user/system-wide config paths.
+Root mode scans local account home directories (including common service-user
+homes); rootless mode limits config discovery to the current user's home.
+
+Client API endpoints, authentication, and compatibility must be verified by
+the upstream client adapter at runtime. Package detection alone is never
+reported as an authenticated client connection.
