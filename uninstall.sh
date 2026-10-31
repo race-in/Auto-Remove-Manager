@@ -12,6 +12,29 @@ ok(){ printf '%s✓ %s%s\n' "$GREEN" "$*" "$RESET"; }
 warn(){ printf '%s! %s%s\n' "$YELLOW" "$*" "$RESET"; }
 die(){ printf '%s✗ %s%s\n' "$RED" "$*" "$RESET" >&2; exit 1; }
 
+remove_marked_cron() {
+  local target_user="$1"
+  local cron_tmp cron_clean
+  command -v crontab >/dev/null 2>&1 || return 0
+  cron_tmp="$(mktemp)"
+  cron_clean="$(mktemp)"
+  if [[ -n "$target_user" ]]; then
+    crontab -u "$target_user" -l > "$cron_tmp" 2>/dev/null || true
+  else
+    crontab -l > "$cron_tmp" 2>/dev/null || true
+  fi
+  if grep -q '# AUTO-REMOVE-MANAGER$' "$cron_tmp"; then
+    grep -v '# AUTO-REMOVE-MANAGER$' "$cron_tmp" > "$cron_clean" || true
+    if [[ -n "$target_user" ]]; then
+      crontab -u "$target_user" "$cron_clean"
+    else
+      crontab "$cron_clean"
+    fi
+    ok "Removed this manager's marked cron entry."
+  fi
+  rm -f "$cron_tmp" "$cron_clean"
+}
+
 while (($#)); do
   case "$1" in
     --mode) (($# >= 2)) || die "--mode requires root or rootless"; MODE="$2"; shift 2 ;;
@@ -20,7 +43,7 @@ while (($#)); do
     *) die "Unknown option: $1" ;;
   esac
 done
-[[ "$MODE" == root || "$MODE" == rootless ]] || die "Specify --mode root or --mode rootless."
+[[ "$MODE" == root || "$MODE" == rootless ]] || die "Specify --mode root or rootless."
 
 if [[ "$MODE" == root ]]; then
   [[ "$EUID" -eq 0 ]] || die "Root uninstall requires root."
@@ -29,6 +52,10 @@ if [[ "$MODE" == root ]]; then
   STATE_DIR="/var/lib/auto-remove-manager"
   BIN="/usr/local/bin/autoremove-manager"
   UNIT_DIR="/etc/systemd/system"
+  CRON_USER=""
+  if [[ -f "$CONFIG_DIR/owner" ]]; then
+    CRON_USER="$(cat "$CONFIG_DIR/owner")"
+  fi
 else
   [[ "$EUID" -ne 0 ]] || die "Rootless uninstall must run as the installing user. Do not use sudo."
   BASE="$HOME/.local/share/auto-remove-manager"
@@ -36,6 +63,7 @@ else
   STATE_DIR="$HOME/.local/state/auto-remove-manager"
   BIN="$HOME/.local/bin/autoremove-manager"
   UNIT_DIR="$HOME/.config/systemd/user"
+  CRON_USER=""
 fi
 
 cat <<EOF
@@ -71,10 +99,15 @@ for unit in auto-remove-manager.service auto-remove-manager.timer; do
     warn "Left non-manager unit untouched: $path"
   fi
 done
+
 if [[ "$MODE" == root ]]; then
   systemctl daemon-reload >/dev/null 2>&1 || true
+  if [[ -n "$CRON_USER" ]]; then
+    remove_marked_cron "$CRON_USER"
+  fi
 else
   systemctl --user daemon-reload >/dev/null 2>&1 || true
+  remove_marked_cron ""
 fi
 
 if [[ -f "$BIN" ]] && grep -Fq "$MARKER" "$BIN"; then
@@ -98,17 +131,6 @@ remove_owned_dir() {
 remove_owned_dir "$CONFIG_DIR"
 remove_owned_dir "$STATE_DIR"
 remove_owned_dir "$BASE"
-
-if [[ "$MODE" == rootless ]] && command -v crontab >/dev/null 2>&1; then
-  tmp="$(mktemp)"
-  trap 'rm -f "$tmp"' EXIT
-  if crontab -l > "$tmp" 2>/dev/null; then
-    if grep -q '# AUTO-REMOVE-MANAGER$' "$tmp"; then
-      sed '/# AUTO-REMOVE-MANAGER$/d' "$tmp" | crontab -
-      ok "Removed this manager's marked cron entry."
-    fi
-  fi
-fi
 
 ok "Auto-Remove-Manager ($MODE) uninstall completed."
 echo "Torrent clients, their configuration, downloads, and torrent data were not touched."
