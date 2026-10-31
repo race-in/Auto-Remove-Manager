@@ -64,9 +64,15 @@ def process_inventory() -> list[dict[str, str]]:
 def service_inventory() -> list[str]:
     if not shutil.which("systemctl"):
         return []
-    commands = [["systemctl", "list-units", "--all", "--type=service", "--no-legend", "--no-pager"]]
+    commands = [
+        ["systemctl", "list-units", "--all", "--type=service", "--no-legend", "--no-pager"],
+        ["systemctl", "list-unit-files", "--type=service", "--no-legend", "--no-pager"],
+    ]
     if os.geteuid() != 0:
-        commands.append(["systemctl", "--user", "list-units", "--all", "--type=service", "--no-legend", "--no-pager"])
+        commands.extend([
+            ["systemctl", "--user", "list-units", "--all", "--type=service", "--no-legend", "--no-pager"],
+            ["systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager"],
+        ])
     found: set[str] = set()
     for command in commands:
         try:
@@ -80,12 +86,36 @@ def service_inventory() -> list[str]:
     return sorted(found)
 
 
+def package_inventory() -> list[str]:
+    """Return installed Debian package names without making package changes."""
+    if not shutil.which("dpkg-query"):
+        return []
+    try:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${binary:Package}\\n"],
+            check=False, capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return sorted({line.strip().lower() for line in result.stdout.splitlines() if line.strip()})
+
+
 def homes_to_scan(mode: str) -> list[pathlib.Path]:
     homes: set[pathlib.Path] = set()
     if mode == "root" and os.geteuid() == 0:
+        service_accounts = {"debian-transmission", "transmission", "deluge", "qbittorrent"}
         for entry in pwd.getpwall():
             home = pathlib.Path(entry.pw_dir)
-            if home.is_dir() and str(home).startswith(("/home/", "/root")):
+            home_text = str(home)
+            if home_text in ("", "/") or home_text.startswith("/nonexistent"):
+                continue
+            known_service_home = (
+                entry.pw_name in service_accounts
+                or home_text.startswith(("/var/lib/", "/srv/", "/media/", "/mnt/"))
+            )
+            if (entry.pw_uid == 0 or entry.pw_uid >= 1000 or known_service_home) and home.is_dir():
                 homes.add(home)
     else:
         homes.add(pathlib.Path.home())
@@ -98,10 +128,12 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
         candidates = [
             ("qbittorrent", home / ".config/qBittorrent/qBittorrent.conf"),
             ("qbittorrent", home / ".config/qBittorrent/config/qBittorrent.conf"),
+            ("qbittorrent", home / ".var/app/org.qbittorrent.qBittorrent/config/qBittorrent/qBittorrent.conf"),
             ("deluge", home / ".config/deluge/auth"),
             ("transmission", home / ".config/transmission-daemon/settings.json"),
             ("transmission", home / ".var/app/com.transmissionbt.Transmission/config/transmission-daemon/settings.json"),
             ("utorrent", home / ".config/utserver/utserver.conf"),
+            ("utorrent", home / ".utserver.conf"),
         ]
         for client, path in candidates:
             try:
@@ -109,13 +141,30 @@ def config_inventory(mode: str) -> list[dict[str, str]]:
                     configs.append({"client": client, "path": str(path), "home": str(home)})
             except OSError:
                 continue
+    for client, path in (
+        ("transmission", pathlib.Path("/etc/transmission-daemon/settings.json")),
+        ("transmission", pathlib.Path("/var/lib/transmission-daemon/info/settings.json")),
+        ("transmission", pathlib.Path("/var/lib/transmission/.config/transmission-daemon/settings.json")),
+    ):
+        try:
+            if path.is_file():
+                configs.append({"client": client, "path": str(path), "home": "system"})
+        except OSError:
+            continue
     return configs
 
 
 def detect_clients(mode: str) -> dict[str, Any]:
     processes = process_inventory()
     services = service_inventory()
+    packages = package_inventory()
     configs = config_inventory(mode)
+    package_patterns = {
+        "qbittorrent": ("qbittorrent",),
+        "deluge": ("deluge", "python3-deluge"),
+        "transmission": ("transmission-daemon", "transmission-gtk", "transmission-qt"),
+        "utorrent": ("utserver", "utorrent"),
+    }
     result: dict[str, Any] = {"supported": [], "detection_only": []}
 
     for client, names in SUPPORTED.items():
@@ -127,12 +176,17 @@ def detect_clients(mode: str) -> dict[str, Any]:
         ]
         service_hits = [unit for unit in services if any(name.replace("-", "").lower() in unit.replace("-", "").lower() for name in names)]
         config_hits = [entry for entry in configs if entry["client"] == client]
-        detected = bool(process_hits or service_hits or config_hits)
+        package_hits = [
+            package for package in packages
+            if any(package == pattern or package.startswith(pattern + ":") for pattern in package_patterns[client])
+        ]
+        detected = bool(process_hits or service_hits or config_hits or package_hits)
         result["supported"].append({
             "client": client,
             "detected": detected,
             "processes": process_hits,
             "services": service_hits,
+            "packages": package_hits,
             "configs": config_hits,
             "api_verified": False,
             "status": "candidate" if detected else "not_detected",
