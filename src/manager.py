@@ -182,7 +182,7 @@ def default_host(client: str, configs: list[dict[str, str]]) -> str:
     if client == "transmission":
         return "http://127.0.0.1:9091"
     if client == "utorrent":
-        return "http://127.0.0.1:8080/gui"
+        return "http://127.0.0.1:8080"
     raise ValueError(f"Unsupported client: {client}")
 
 
