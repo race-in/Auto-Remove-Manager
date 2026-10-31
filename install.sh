@@ -104,7 +104,10 @@ fi
 
 install_os_packages() {
   local need_venv="$1"
-  if [[ -r /etc/os-release ]]; then . /etc/os-release; fi
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  fi
   if has apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
