@@ -15,9 +15,9 @@ The current upstream repository does not provide an rTorrent adapter. The
 manager must not generate an rTorrent task or claim it is supported. A future
 adapter would need independent API coverage and tests before being enabled.
 
-The current discovery layer is Linux-focused and targets Debian/Ubuntu
-seedboxes. It inspects visible processes, systemd services and installed unit
-files, Debian package records, and common per-user/system-wide config paths.
+The discovery layer is Linux-focused and panel-independent. It inspects visible
+processes, systemd services and installed unit files, package records from dpkg,
+rpm, pacman, or apk, and common per-user/system-wide config paths.
 Root mode scans local account home directories (including common service-user
 homes); rootless mode limits config discovery to the current user's home.
 
