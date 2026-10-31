@@ -368,11 +368,13 @@ def main() -> int:
         print("Refusing removal: pass --confirm-removal after enabling allow_removal in manager.json.", file=sys.stderr)
         return 3
     allow_removal = bool(settings.get("allow_removal", False))
-    if args.command == "run" and not allow_removal:
-        print("Refusing removal: allow_removal is false in manager.json.", file=sys.stderr)
+    preview_only = bool(settings.get("preview_only", True))
+    removal_enabled = allow_removal and not preview_only
+    if args.command == "run" and not removal_enabled:
+        print("Refusing removal: set allow_removal=true and preview_only=false in manager.json first.", file=sys.stderr)
         return 3
 
-    removal_mode = args.command == "run" or (args.command == "scheduled" and allow_removal)
+    removal_mode = args.command == "run" or (args.command == "scheduled" and removal_enabled)
     allow_data_deletion = bool(settings.get("allow_data_deletion", False))
     if removal_mode and not allow_data_deletion:
         deleting_tasks = [name for name, task in tasks.items()
