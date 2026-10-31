@@ -1,85 +1,164 @@
 # Auto-Remove-Manager
 
 [![CI](https://github.com/race-in/Auto-Remove-Manager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/race-in/Auto-Remove-Manager/actions/workflows/ci.yml)
+[![ShellCheck](https://github.com/race-in/Auto-Remove-Manager/actions/workflows/shellcheck.yml/badge.svg?branch=main)](https://github.com/race-in/Auto-Remove-Manager/actions/workflows/shellcheck.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A safe one-command installer and lifecycle manager for AutoRemove Torrents.
+**A safe one-command installer and manager for AutoRemove Torrents.**
 
-Supports two separate installation modes:
-- **Root/system-wide:** dedicated system paths and systemd service/timer.
-- **Rootless/per-user:** user-owned paths and user systemd, with cron fallback planned.
+Two separate installation modes are supported:
+- **Root/system-wide:** system paths, dedicated systemd service/timer, service runs as the invoking sudo user when installed through sudo.
+- **Rootless/per-user:** all program, config, logs and units stay under the user's home; uses user systemd or a marked per-user cron entry.
 
-Safety defaults: preview-first, downloaded-data deletion disabled, no changes to torrent-client configuration, and scoped uninstallation.
+## One-click installation
 
-## Supported upstream adapters
+### Root mode
 
-| Client | Adapter | Integration |
-|---|---|---|
-| qBittorrent | Yes | Web API |
-| Deluge | Yes | RPC |
-| Transmission | Yes | RPC |
-| µTorrent | Yes | Web API |
-| rTorrent | No | Detection/report only; no upstream adapter |
-
-Detection of a process or config file is not proof that the API is reachable. Tasks must only be generated after endpoint/authentication verification. Some credentials cannot be recovered from client config (qBittorrent WebUI password hashes, for example), so the installer must ask rather than guess.
-
-## Install
-
-Root/system-wide, run as root:
+Run as root or with sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh -o /tmp/arm-install.sh
-bash /tmp/arm-install.sh --mode root
+bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh) --mode root
 ```
 
-Rootless, run as the torrent-client owner (do not use sudo):
+### Rootless mode
+
+Run as the torrent-client owner. Do not use sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh -o /tmp/arm-install.sh
-bash /tmp/arm-install.sh --mode rootless
+bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh) --mode rootless
 ```
 
-Interactive mode selection:
+The interactive installer can also select the mode:
 
 ```bash
-bash /tmp/arm-install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/main/install.sh)
 ```
+
+## Features
+
+- Detects supported clients using running processes, systemd units, and common user configuration paths.
+- Supports qBittorrent, Deluge, Transmission, and µTorrent through upstream adapters.
+- Reports rTorrent if detected, but does not create an rTorrent task because the upstream engine has no rTorrent adapter.
+- Tests client authentication and reads basic client status before saving a task.
+- Creates a separate upstream task for each verified client.
+- Stores the upstream YAML with owner-only permissions; credentials are never printed by this manager.
+- Uses upstream strategy expressions; does not invent cleanup rules.
+- Runs an hourly preview schedule by default.
+- Protects against concurrent runs with a process lock.
+- Uses explicit deletion and payload-deletion safeguards.
+- One-click uninstall removes manager-owned files, configuration, credentials, logs, virtual environment, service/timer and marked cron entry.
+
+## First-time setup
+
+After installation:
+
+```bash
+autoremove-manager detect
+autoremove-manager configure
+autoremove-manager test
+autoremove-manager preview
+```
+
+The configure wizard lists every supported local candidate and asks for the endpoint and missing credentials. A task is saved only after the upstream adapter successfully authenticates and reads client status. Some secrets cannot be extracted from client configuration. For example, qBittorrent stores a WebUI password hash, so the password must be entered interactively.
+
+The wizard creates empty strategy mappings. This is deliberate: a client can be connected without automatically applying a removal rule you have not reviewed. Add your preferred conditions to the upstream YAML configuration after reading the [official strategy documentation](https://autoremove-torrents.readthedocs.io/en/latest/).
 
 ## Commands
 
 ```bash
 autoremove-manager status
 autoremove-manager detect
+autoremove-manager configure
 autoremove-manager test
 autoremove-manager preview
-autoremove-manager run
+autoremove-manager logs
 autoremove-manager uninstall
 ```
 
-The initial release is preview-only. Actual torrent deletion and deletion of payload data are separate settings and must never be enabled implicitly.
+Actual removal is disabled by default. To manually enable it, edit `manager.json` and set both:
 
-## Uninstall
+```json
+{
+  "preview_only": false,
+  "allow_removal": true
+}
+```
+
+Then run:
+
+```bash
+autoremove-manager run --confirm-removal
+```
+
+Scheduled runs remain preview-only until the same settings are deliberately changed. Removing downloaded payload data has an additional separate opt-in: `allow_data_deletion: true`, plus `delete_data: true` in the relevant task. Read [Configuration](docs/CONFIGURATION.md) before enabling either option.
+
+## Uninstallation
+
+One-click, with confirmation:
+
+```bash
+autoremove-manager uninstall
+```
+
+Or run the standalone uninstaller directly:
 
 Root mode:
 
 ```bash
-bash uninstall.sh --mode root
+bash /opt/auto-remove-manager/uninstall.sh --mode root
 ```
 
-Rootless mode, as the installing user:
+Rootless mode:
 
 ```bash
-bash uninstall.sh --mode rootless
+bash ~/.local/share/auto-remove-manager/uninstall.sh --mode rootless
 ```
 
-The uninstaller is scoped to this manager's own installation paths, unit files, and marked cron entries. It must not remove torrent clients, torrent data, downloads, or client configuration.
+The uninstaller uses ownership markers and removes only the exact manager-owned paths and scheduled jobs. It does not remove or modify torrent clients, client settings, torrents, download directories, or payload data. See [Uninstallation](docs/UNINSTALL.md).
 
-## Upstream
+## Supported clients
 
-- [AutoRemove Torrents source](https://github.com/jerrymakesjelly/autoremove-torrents)
-- [AutoRemove Torrents documentation](https://autoremove-torrents.readthedocs.io/en/latest/)
-- [QuickBox Lite](https://github.com/amefs/quickbox-lite) for general one-key installer UX inspiration. No QuickBox Lite source is copied.
+| Client | Detection | Upstream adapter | Method |
+|---|---|---|---|
+| qBittorrent | Process, systemd, common config | Yes | Web API |
+| Deluge | Process, systemd, auth file | Yes | RPC |
+| Transmission | Process, systemd, common config | Yes | RPC |
+| µTorrent | Process, systemd, common config | Yes | Web API |
+| rTorrent | Process and systemd | No | Report only |
 
-The upstream AutoRemove Torrents project is MIT licensed. This manager's own code is also MIT licensed; see [LICENSE](LICENSE).
+See [Supported Clients](docs/SUPPORTED_CLIENTS.md) and [Troubleshooting](docs/TROUBLESHOOTING.md).
 
-> Development status: the repository scaffold and safety foundations are being built. Do not use automatic destructive cleanup until client discovery, API validation, preview, and uninstall tests are complete.
+## Safety model
+
+1. Discovery is read-only and does not report an API as verified.
+2. Client tasks are saved only after API login/basic status verification.
+3. Preview is the default for manual and scheduled runs.
+4. Actual removal needs explicit settings and, for a manual run, a confirmation flag.
+5. Downloaded-data removal needs a second explicit opt-in.
+6. Overlapping jobs are prevented with a lock.
+7. Uninstall checks project ownership markers before deleting managed directories.
+
+## Development
+
+```bash
+bash -n install.sh
+bash -n uninstall.sh
+shellcheck --severity=style install.sh uninstall.sh
+python3 -m pip install -r requirements.txt
+python3 -m compileall -q src tests
+python3 -m unittest discover -s tests -v
+```
+
+See [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md).
+
+## Upstream and attribution
+
+- Cleanup engine: [jerrymakesjelly/autoremove-torrents](https://github.com/jerrymakesjelly/autoremove-torrents), MIT License.
+- Behavior and strategy reference: [official documentation](https://autoremove-torrents.readthedocs.io/en/latest/).
+- Installer UX inspiration: [QuickBox Lite](https://github.com/amefs/quickbox-lite). No QuickBox Lite code is copied into this project.
+
+Auto-Remove-Manager is an independent installer/orchestration project. It does not claim authorship of the upstream cleanup engine.
+
+## License
+
+The manager's own code is licensed under MIT. See [LICENSE](LICENSE). The upstream dependency retains its own license and notices.
