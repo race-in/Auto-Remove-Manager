@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/
 
 ## Features
 
-- Detects supported clients using running processes, systemd units, and common user configuration paths.
+- Detects supported clients using running processes, installed Debian packages, systemd service/unit files, and common per-user or system-wide configuration paths.
 - Supports qBittorrent, Deluge, Transmission, and µTorrent through upstream adapters.
 - Reports rTorrent if detected, but does not create an rTorrent task because the upstream engine has no rTorrent adapter.
 - Tests client authentication and reads basic client status before saving a task.
