@@ -59,7 +59,7 @@ autoremove-manager test
 autoremove-manager preview
 ```
 
-The configure wizard lists every supported local candidate and asks for the endpoint and missing credentials. A task is saved only after the upstream adapter successfully authenticates and reads client status. Some secrets cannot be extracted from client configuration. For example, qBittorrent stores a WebUI password hash, so the password must be entered interactively.
+The configure wizard lists every supported local candidate and asks for the endpoint and missing credentials. A task is saved only after the upstream adapter successfully authenticates and reads client status. For a root installation run through sudo, run the management commands as the same normal user that invoked sudo (without sudo); that user owns the manager configuration and scheduled service. If the installer was run directly as root, run them as root. Some secrets cannot be extracted from client configuration. For example, qBittorrent stores a WebUI password hash, so the password must be entered interactively.
 
 The wizard creates empty strategy mappings. This is deliberate: a client can be connected without automatically applying a removal rule you have not reviewed. Add your preferred conditions to the upstream YAML configuration after reading the [official strategy documentation](https://autoremove-torrents.readthedocs.io/en/latest/).
 
@@ -94,10 +94,18 @@ Scheduled runs remain preview-only until the same settings are deliberately chan
 
 ## Uninstallation
 
-One-click, with confirmation:
+One-click, with confirmation.
+
+For a root/system-wide installation:
 
 ```bash
-autoremove-manager uninstall
+sudo autoremove-manager uninstall
+```
+
+For a rootless/per-user installation, run as the installing user:
+
+```bash
+~/.local/bin/autoremove-manager uninstall
 ```
 
 Or run the standalone uninstaller directly:
