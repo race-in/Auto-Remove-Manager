@@ -87,19 +87,24 @@ def service_inventory() -> list[str]:
 
 
 def package_inventory() -> list[str]:
-    """Return installed Debian package names without making package changes."""
-    if not shutil.which("dpkg-query"):
-        return []
-    try:
-        result = subprocess.run(
-            ["dpkg-query", "-W", "-f=${binary:Package}\\n"],
-            check=False, capture_output=True, text=True, timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if result.returncode != 0:
-        return []
-    return sorted({line.strip().lower() for line in result.stdout.splitlines() if line.strip()})
+    """Read package names from common Linux package databases, without mutations."""
+    commands = []
+    if shutil.which("dpkg-query"):
+        commands.append(["dpkg-query", "-W", "-f=${binary:Package}\\n"])
+    if shutil.which("rpm"):
+        commands.append(["rpm", "-qa", "--qf", "%{NAME}\\n"])
+    if shutil.which("pacman"):
+        commands.append(["pacman", "-Qq"])
+    if shutil.which("apk"):
+        commands.append(["apk", "info"])
+    for command in commands:
+        try:
+            result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return sorted({line.strip().lower() for line in result.stdout.splitlines() if line.strip()})
+    return []
 
 
 def homes_to_scan(mode: str) -> list[pathlib.Path]:
