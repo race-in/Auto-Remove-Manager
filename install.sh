@@ -127,6 +127,7 @@ fi
 mkdir -p "$(dirname "$BASE")"
 if [[ -e "$BASE" ]]; then
   [[ -d "$BASE/.git" ]] || die "Refusing to overwrite non-Git path: $BASE"
+  [[ -f "$BASE/.arm-owned" && "$(cat "$BASE/.arm-owned")" == "$MARKER" ]] || die "Refusing to adopt an existing unmarked directory: $BASE"
   if ((YES == 0)); then
     read -r -p "Existing Auto-Remove-Manager installation found. Update it? [y/N] " answer
     [[ "$answer" =~ ^[Yy]$ ]] || exit 0
@@ -135,14 +136,27 @@ if [[ -e "$BASE" ]]; then
   git -C "$BASE" reset --quiet --hard origin/main
 else
   git clone --quiet --depth 1 "$REPO_URL" "$BASE"
+  printf '%s\n' "$MARKER" > "$BASE/.arm-owned"
+  chmod 700 "$BASE"
 fi
 
-mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$BIN_DIR" "$UNIT_DIR"
-for dir in "$BASE" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"; do
+ensure_owned_dir() {
+  local dir="$1"
   [[ ! -L "$dir" ]] || die "Refusing symlinked managed directory: $dir"
-  printf '%s\n' "$MARKER" > "$dir/.arm-owned"
+  if [[ -e "$dir" ]]; then
+    [[ -d "$dir" ]] || die "Managed path exists but is not a directory: $dir"
+    [[ -f "$dir/.arm-owned" && "$(cat "$dir/.arm-owned")" == "$MARKER" ]] || die "Refusing to claim an existing unmarked directory: $dir"
+  else
+    mkdir -p "$dir"
+    printf '%s\n' "$MARKER" > "$dir/.arm-owned"
+  fi
   chmod 700 "$dir"
-done
+}
+
+ensure_owned_dir "$CONFIG_DIR"
+ensure_owned_dir "$STATE_DIR"
+ensure_owned_dir "$LOG_DIR"
+mkdir -p "$BIN_DIR" "$UNIT_DIR"
 
 VENV="$BASE/venv"
 if [[ ! -x "$VENV/bin/python" ]]; then
