@@ -1,4 +1,3 @@
-import os
 import pathlib
 import stat
 import sys
@@ -43,7 +42,7 @@ class ManagerTests(unittest.TestCase):
     def test_default_hosts(self):
         self.assertEqual(manager.default_host("deluge", []), "127.0.0.1:58846")
         self.assertEqual(manager.default_host("transmission", []), "http://127.0.0.1:9091")
-        self.assertEqual(manager.default_host("utorrent", []), "http://127.0.0.1:8080/gui")
+        self.assertEqual(manager.default_host("utorrent", []), "http://127.0.0.1:8080")
 
     def test_atomic_write_sets_private_permissions(self):
         with tempfile.TemporaryDirectory() as tmp:
