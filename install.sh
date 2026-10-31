@@ -156,7 +156,28 @@ ensure_owned_dir() {
 ensure_owned_dir "$CONFIG_DIR"
 ensure_owned_dir "$STATE_DIR"
 ensure_owned_dir "$LOG_DIR"
+[[ ! -L "$BIN_DIR" ]] || die "Refusing symlinked binary directory: $BIN_DIR"
+[[ ! -L "$UNIT_DIR" ]] || die "Refusing symlinked systemd unit directory: $UNIT_DIR"
 mkdir -p "$BIN_DIR" "$UNIT_DIR"
+
+assert_manager_file() {
+  local path="$1"
+  if [[ -L "$path" ]]; then
+    die "Refusing symlinked manager output path: $path"
+  elif [[ -e "$path" ]]; then
+    [[ -f "$path" ]] || die "Refusing non-file manager output path: $path"
+    grep -Fq "$MARKER" "$path" || die "Refusing to overwrite a file not owned by this manager: $path"
+  fi
+}
+assert_manager_file "$BIN_DIR/autoremove-manager"
+assert_manager_file "$UNIT_DIR/auto-remove-manager.service"
+assert_manager_file "$UNIT_DIR/auto-remove-manager.timer"
+
+for config_file in manager.json config.yml owner; do
+  [[ ! -L "$CONFIG_DIR/$config_file" ]] || die "Refusing symlinked configuration file: $CONFIG_DIR/$config_file"
+done
+[[ ! -e "$CONFIG_DIR/manager.json" || -f "$CONFIG_DIR/manager.json" ]] || die "manager.json is not a regular file."
+[[ ! -e "$CONFIG_DIR/config.yml" || -f "$CONFIG_DIR/config.yml" ]] || die "config.yml is not a regular file."
 
 VENV="$BASE/venv"
 if [[ ! -x "$VENV/bin/python" ]]; then
@@ -206,7 +227,11 @@ if [[ ! -f "$CONFIG_DIR/config.yml" ]]; then
   chmod 600 "$CONFIG_DIR/config.yml"
 fi
 printf '%s\n' "$RUN_USER" > "$CONFIG_DIR/owner"
-chmod 600 "$CONFIG_DIR/owner"
+chmod 600 "$CONFIG_DIR/manager.json" "$CONFIG_DIR/config.yml" "$CONFIG_DIR/owner"
+
+if [[ -L "$VENV" ]]; then
+  die "Refusing symlinked virtual environment path: $VENV"
+fi
 
 cat > "$BIN_DIR/autoremove-manager" <<EOF
 #!/usr/bin/env bash
