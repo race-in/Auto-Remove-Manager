@@ -181,7 +181,12 @@ def detect_clients(mode: str) -> dict[str, Any]:
         config_hits = [entry for entry in configs if entry["client"] == client]
         package_hits = [
             package for package in packages
-            if any(package == pattern or package.startswith(pattern + ":") for pattern in package_patterns[client])
+            if any(
+                package == pattern
+                or package.startswith(pattern + "-")
+                or package.startswith(pattern + ":")
+                for pattern in package_patterns[client]
+            )
         ]
         detected = bool(process_hits or service_hits or config_hits or package_hits)
         result["supported"].append({
@@ -203,7 +208,10 @@ def detect_clients(mode: str) -> dict[str, Any]:
             or any(re.search(r"(^|[/ ])" + re.escape(name) + r"([ /]|$)", item["args"], re.I) for name in names)
         ]
         service_hits = [unit for unit in services if any(name in unit.lower() for name in names)]
-        package_hits = [package for package in packages if any(package == name or package.startswith(name + ":") for name in names)]
+        package_hits = [
+            package for package in packages
+            if any(package == name or package.startswith(name + "-") or package.startswith(name + ":") for name in names)
+        ]
         config_hits = [entry for entry in configs if entry["client"] == client]
         detected = bool(process_hits or service_hits or package_hits or config_hits)
         result["detection_only"].append({
