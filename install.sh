@@ -102,27 +102,53 @@ else
   UNIT_DIR="$RUN_HOME/.config/systemd/user"
 fi
 
-if ! has python3 || ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3,8))'; then
-  if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
-    info "Installing required Debian/Ubuntu packages (no system upgrade)."
+install_os_packages() {
+  local need_venv="$1"
+  if [[ -r /etc/os-release ]]; then . /etc/os-release; fi
+  if has apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates git python3 python3-venv
+    local packages=(ca-certificates git python3 python3-pip)
+    [[ "$need_venv" == yes ]] && packages+=(python3-venv)
+    apt-get install -y --no-install-recommends "${packages[@]}"
+  elif has dnf; then
+    dnf install -y ca-certificates git python3 python3-pip
+  elif has yum; then
+    yum install -y ca-certificates git python3 python3-pip
+  elif has zypper; then
+    zypper --non-interactive refresh
+    zypper --non-interactive install ca-certificates git python3 python3-pip
+  elif has pacman; then
+    pacman -Sy --needed --noconfirm ca-certificates git python python-pip
+  elif has apk; then
+    apk add --no-cache ca-certificates git python3 py3-pip
+    if [[ "$need_venv" == yes ]]; then apk add --no-cache py3-virtualenv; fi
   else
-    die "Python 3.8+ and python3-venv are required. Install them, then rerun."
+    die "No supported package manager found. Install Python 3.8+, pip, venv support, Git, and CA certificates manually."
   fi
+}
+
+if [[ "$MODE" == root ]]; then
+  need_packages=0
+  if ! has python3 || ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3,8))'; then need_packages=1; fi
+  has git || need_packages=1
+  if ((need_packages)); then
+    info "Installing missing runtime dependencies with the detected OS package manager."
+    install_os_packages no
+  fi
+  if ! python3 -c 'import venv' >/dev/null 2>&1; then
+    info "Installing Python virtual-environment support."
+    install_os_packages yes
+  fi
+else
+  python3 -c 'import sys, venv; raise SystemExit(sys.version_info < (3,8))' >/dev/null 2>&1 ||
+    die "Rootless mode needs Python 3.8+ with venv support. Install it using your OS package manager, then rerun."
+  has git || die "Git is required in rootless mode. Install Git, then rerun."
 fi
 
-if ! has git; then
-  if [[ "$MODE" == root && -f /etc/debian_version ]] && has apt-get; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends git ca-certificates
-  else
-    die "git is required. Install it, then rerun."
-  fi
-fi
-
+python3 -c 'import sys, venv; raise SystemExit(sys.version_info < (3,8))' >/dev/null 2>&1 ||
+  die "Python 3.8+ with venv support is required."
+has git || die "Git is required."
 [[ ! -L "$BASE" ]] || die "Refusing symlinked install path: $BASE"
 mkdir -p "$(dirname "$BASE")"
 if [[ -e "$BASE" ]]; then
