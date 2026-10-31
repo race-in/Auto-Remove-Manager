@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import getpass
-import glob
 import json
 import os
 import pathlib
@@ -346,6 +344,18 @@ def main() -> int:
                                  "scheduled", "run", "logs", "uninstall"))
     args = parser.parse_args()
 
+    # Uninstall must not depend on valid settings/YAML; it must still work after
+    # a malformed config or interrupted update.
+    if args.command == "uninstall":
+        script = pathlib.Path(__file__).resolve().parents[1] / "uninstall.sh"
+        if not script.is_file():
+            print("Uninstaller is missing. Run the standalone uninstall.sh script.", file=sys.stderr)
+            return 1
+        command = ["bash", str(script), "--mode", args.mode]
+        if args.yes:
+            command.append("--yes")
+        return subprocess.run(command, check=False).returncode
+
     try:
         settings = load_json(args.config)
         tasks = load_upstream_yaml(args.upstream_config)
@@ -370,15 +380,6 @@ def main() -> int:
         return 0
     if args.command == "configure":
         return configure_clients(args.mode, args.upstream_config, args.log_dir)
-    if args.command == "uninstall":
-        script = pathlib.Path(__file__).resolve().parents[1] / "uninstall.sh"
-        if not script.is_file():
-            print("Uninstaller is missing. Run the standalone uninstall.sh script.", file=sys.stderr)
-            return 1
-        command = ["bash", str(script), "--mode", args.mode]
-        if args.yes:
-            command.append("--yes")
-        return subprocess.run(command, check=False).returncode
     if args.command == "logs":
         print(args.log_dir)
         if args.log_dir.exists():
