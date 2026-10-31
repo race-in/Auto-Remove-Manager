@@ -76,3 +76,10 @@ These commands inspect the local client setup without restarting clients:
 
 A detected process or config file is only a discovery candidate; it does not
 prove that the API endpoint is reachable or authenticated.
+## Log rotation
+
+Feral rootless installs use the same bounded upstream log policy: each daily
+log file rotates when it reaches 5 MiB and keeps one previous segment (`.1`).
+The active log and its single backup are retained; older rotated content is
+replaced on the next rollover. Rotation is handled by the manager's Python
+logging handler and does not require cron changes or client restarts.
