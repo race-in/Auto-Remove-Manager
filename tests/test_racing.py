@@ -295,29 +295,30 @@ class QbittorrentRemovalTests(unittest.TestCase):
 
         session.get.assert_not_called()
 
-    def test_verification_http_error_propagates(self):
+    def test_verification_http_error_fails_closed(self):
         from unittest.mock import Mock
 
         accepted = Mock()
         accepted.raise_for_status.return_value = None
-
         failed_response = Mock()
         failed_response.raise_for_status.side_effect = RuntimeError(
             "verification HTTP failure"
         )
-
         session = Mock()
         session.post.return_value = accepted
         session.get.return_value = failed_response
         api = self._api(session)
 
-        with self.assertRaises(RuntimeError):
-            api.remove_with_data(["abc123"])
-
+        succeeded, unconfirmed = api.remove_with_data(["abc123"])
+        self.assertEqual(succeeded, [])
+        self.assertEqual(unconfirmed, ["abc123"])
 
     def test_malformed_verification_entries_fail_closed(self):
         from unittest.mock import Mock
-        malformed_entries = [[{"name": "missing hash"}], [{"hash": ""}], [{"hash": "   "}], ["not-a-dictionary"], [None]]
+        malformed_entries = [
+            [{"name": "missing hash"}], [{"hash": ""}], [{"hash": "   "}],
+            ["not-a-dictionary"], [None],
+        ]
         for entries in malformed_entries:
             with self.subTest(entries=entries):
                 response = Mock()
@@ -327,8 +328,9 @@ class QbittorrentRemovalTests(unittest.TestCase):
                 session.post.return_value = response
                 session.get.return_value = response
                 api = self._api(session)
-                with self.assertRaises(RuntimeError):
-                    api.remove_with_data(["abc123"])
+                succeeded, unconfirmed = api.remove_with_data(["abc123"])
+                self.assertEqual(succeeded, [])
+                self.assertEqual(unconfirmed, ["abc123"])
 
     def test_non_list_verification_response_fails_closed(self):
         from unittest.mock import Mock
@@ -339,8 +341,10 @@ class QbittorrentRemovalTests(unittest.TestCase):
         session.post.return_value = response
         session.get.return_value = response
         api = self._api(session)
-        with self.assertRaises(RuntimeError):
-            api.remove_with_data(["abc123"])
+        succeeded, unconfirmed = api.remove_with_data(["abc123"])
+        self.assertEqual(succeeded, [])
+        self.assertEqual(unconfirmed, ["abc123"])
+
 
 
 class DelugeAdapterTests(unittest.TestCase):
