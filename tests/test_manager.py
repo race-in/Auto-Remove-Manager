@@ -239,6 +239,39 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result, 130)
         terminate.assert_called_once_with(process)
 
+    def test_terminate_child_process_survives_repeated_keyboard_interrupt(self):
+        process = mock.Mock()
+        process.pid = 43209
+        process.wait.side_effect = [
+            KeyboardInterrupt(),
+            manager.subprocess.TimeoutExpired("upstream", 1),
+            0,
+        ]
+        with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
+            manager.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
+        ):
+            manager._terminate_child_process(process, grace_seconds=1)
+        self.assertEqual(killpg.call_args_list, [
+            mock.call(43209, manager.signal.SIGTERM),
+            mock.call(43209, manager.signal.SIGKILL),
+        ])
+        self.assertEqual(process.wait.call_count, 3)
+
+    def test_shutdown_signal_sets_stop_event_and_restores_handler(self):
+        stop = threading.Event()
+        previous = {manager.signal.SIGTERM: object(), manager.signal.SIGHUP: object()}
+        with mock.patch.object(manager.signal, "getsignal", side_effect=lambda sig: previous[sig]), mock.patch.object(
+            manager.signal, "signal"
+        ) as set_handler:
+            restore = manager.install_shutdown_handlers(stop)
+            handler = set_handler.call_args_list[0].args[1]
+            handler(manager.signal.SIGTERM, None)
+            self.assertTrue(stop.is_set())
+            restore()
+        self.assertEqual(set_handler.call_count, 4)
+        self.assertEqual(set_handler.call_args_list[-2].args, (manager.signal.SIGTERM, previous[manager.signal.SIGTERM]))
+        self.assertEqual(set_handler.call_args_list[-1].args, (manager.signal.SIGHUP, previous[manager.signal.SIGHUP]))
+
     def test_terminate_child_process_signals_process_group(self):
         process = mock.Mock()
         process.pid = 43210
