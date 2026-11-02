@@ -206,6 +206,29 @@ class HybridCleanupSafetyTests(unittest.TestCase):
         self.assertEqual(api.torrents.call_count, 2)
         api.remove_with_data.assert_called_once_with(["abc123"], stop_event=None)
 
+    def test_racing_revalidation_cannot_add_new_candidates(self):
+        original = {
+            "hash": "original", "name": "previewed",
+            "state": "uploading", "ratio": 1.5, "upspeed": 100,
+        }
+        newly_eligible = {
+            "hash": "new-arrival", "name": "not previewed",
+            "state": "uploading", "ratio": 2.0, "upspeed": 50,
+        }
+        safe = {
+            "preview_only": False, "allow_removal": True,
+            "allow_data_deletion": True, "ratio_min": 1.0,
+            "upload_max_mb": 10.0,
+        }
+        api = Mock()
+        api.client = "qbittorrent"
+        api.torrents.side_effect = [[original], [original, newly_eligible]]
+        api.remove_with_data.return_value = (["original"], [])
+        _racing_cleanup(
+            "qb", api, dict(safe), dict(safe), self.state_dir, self.logger
+        )
+        api.remove_with_data.assert_called_once_with(["original"], stop_event=None)
+
     def test_normal_cleanup_preserves_original_strategy_and_delete_data(self):
         task = {
             "client": "qbittorrent",
