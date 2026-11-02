@@ -491,6 +491,10 @@ def load_json(path: pathlib.Path) -> dict[str, Any]:
                        "download_threshold_mb": 100.0, "upload_max_mb": 10.0,
                        "ratio_min": 1.0, "sustain_seconds": 5.0,
                        "poll_interval_seconds": 1.0},
+            "hybrid": {"enabled": False, "preview_only": True, "allow_removal": False,
+                       "allow_data_deletion": False, "download_threshold_mb": 100.0,
+                       "upload_max_mb": 10.0, "ratio_min": 1.0, "sustain_seconds": 5.0,
+                       "poll_interval_seconds": 1.0, "cleanup_interval_seconds": 60.0},
         }
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -640,6 +644,7 @@ def main() -> int:
             "configured_tasks": list(tasks.keys()),
             "schedule": settings.get("schedule", {}),
             "racing": settings.get("racing", {"enabled": False, "preview_only": True}),
+            "hybrid": settings.get("hybrid", {"enabled": False, "preview_only": True}),
         }, indent=2))
         return 0
     if args.command == "detect":
