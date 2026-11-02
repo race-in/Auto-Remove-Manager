@@ -102,3 +102,10 @@ Rules are evaluated separately for each client task:
 If any API request or authentication check fails, that client's speed streak is reset and no deletion is attempted for that client. The other client's monitor runs in its own worker. A speed dip below the threshold resets the five-second timer and rearms that client's trigger. The monitor shares the manager's run lock before deleting so it cannot overlap an ordinary manager cleanup.
 
 **Warning:** Enabling all three switches permits permanent removal of torrent entries and their downloaded files. First leave Racing Mode in preview-only mode, inspect `racing.log`, verify both APIs and the matching list, and make sure the download directory contains no data you need.
+
+
+## Hybrid Mode
+
+Hybrid mode uses independent qBittorrent and Deluge workers. Each worker enters Racing after download speed stays at or above 100 MB/s for five seconds, and returns to Normal after speed stays below 100 MB/s for five seconds. Invalid samples reset the transition timer. Normal mode runs that task's unchanged upstream YAML rule. Racing mode selects seeding torrents with ratio >= 1.0 and live upload <= 10 MB/s; seeding time is ignored. Cleanup cadence defaults to 60 seconds and all cleanup operations share the manager lock.
+
+The `hybrid` block is disabled by default. Set `hybrid.enabled=true` and run `autoremove-manager hybrid`. Keep `hybrid.preview_only=true` during validation. Racing deletion requires `hybrid.preview_only=false`, `hybrid.allow_removal=true`, and `hybrid.allow_data_deletion=true`. Normal deletion additionally requires the existing top-level `allow_removal`, `preview_only`, and `allow_data_deletion` settings. API errors suspend cleanup for the affected client.
