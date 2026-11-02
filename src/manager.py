@@ -607,7 +607,7 @@ def main() -> int:
                         help="skip the interactive confirmation in the one-click uninstaller")
     parser.add_argument("command", nargs="?", default="status",
                         choices=("status", "detect", "configure", "test", "preview",
-                                 "scheduled", "run", "racing", "logs", "uninstall"))
+                                 "scheduled", "run", "racing", "hybrid", "logs", "uninstall"))
     args = parser.parse_args()
 
     # Uninstall must not depend on valid settings/YAML; it must still work after
@@ -679,6 +679,20 @@ def main() -> int:
             for path in sorted(args.log_dir.glob("*")):
                 print(f"{path.name}\t{path.stat().st_size} bytes")
         return 0
+
+    if args.command == "hybrid":
+        hybrid_settings = settings.get("hybrid", {})
+        if not isinstance(hybrid_settings, dict):
+            print("Invalid Hybrid Mode configuration; expected an object.", file=sys.stderr)
+            return 2
+        if not bool(hybrid_settings.get("enabled", False)):
+            print("Hybrid Mode is disabled. Set hybrid.enabled=true in manager.json to start it.")
+            return 0
+        if not tasks:
+            print("No configured client tasks. Run 'autoremove-manager configure' first.")
+            return 0
+        from hybrid import run_hybrid
+        return run_hybrid(tasks, hybrid_settings, args, settings)
 
     if args.command == "racing":
         racing_settings = settings.get("racing", {})
