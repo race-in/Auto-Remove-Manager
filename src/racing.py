@@ -62,6 +62,23 @@ def eligible_torrents(client: str, torrents: list[dict[str, Any]],
     return selected
 
 
+def revalidated_hashes(client: str, preview_candidates: list[dict[str, Any]],
+                       latest_torrents: list[dict[str, Any]], ratio_min: float = 1.0,
+                       upload_max_bytes: float = DEFAULT_UPLOAD_MAX_MB * MB) -> list[str]:
+    """Keep only originally previewed hashes that remain eligible on final read."""
+    preview_hashes = {
+        str(item["hash"]) for item in preview_candidates
+        if isinstance(item, dict) and item.get("hash")
+    }
+    latest_candidates = eligible_torrents(
+        client, latest_torrents, ratio_min, upload_max_bytes
+    )
+    return [
+        str(item["hash"]) for item in latest_candidates
+        if str(item["hash"]) in preview_hashes
+    ]
+
+
 class SpeedGate:
     """One-shot threshold gate; a failed sample or dip resets the full streak."""
 
@@ -358,18 +375,12 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                         # Re-read immediately before deletion so a stale
                                         # preview cannot authorize removal after state/ratio changes.
                                         latest = client.torrents()
-                                        latest_candidates = eligible_torrents(
-                                            client.client, latest, ratio_min, upload_mb * MB
-                                        )
                                         # Never delete a torrent that was not in the
                                         # original eligibility snapshot for this trigger.
-                                        preview_hashes = {
-                                            str(item["hash"]) for item in candidates
-                                        }
-                                        hashes = [
-                                            str(item["hash"]) for item in latest_candidates
-                                            if str(item["hash"]) in preview_hashes
-                                        ]
+                                        hashes = revalidated_hashes(
+                                            client.client, candidates, latest,
+                                            ratio_min, upload_mb * MB,
+                                        )
                                         if not hashes:
                                             logger.info(
                                                 "%s: candidates no longer match on final verification; nothing removed.",
