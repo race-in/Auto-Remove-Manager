@@ -133,5 +133,42 @@ class QbittorrentConnectionTests(unittest.TestCase):
         self.assertTrue(calls[2][1].endswith("/api/v2/transfer/info"))
 
 
+
+class DelugeAdapterTests(unittest.TestCase):
+    def test_torrent_status_uses_mapping_keys_as_hashes(self):
+        from unittest.mock import patch
+
+        calls = []
+
+        class FakeRPC:
+            def call(self, method, *args):
+                calls.append((method, args))
+                if method == "core.get_torrents_status":
+                    return {
+                        "abc123": {
+                            "name": "seeded",
+                            "state": "Seeding",
+                            "ratio": 1.5,
+                            "upload_payload_rate": 100,
+                        }
+                    }
+                raise AssertionError("Unexpected RPC method: " + method)
+
+        api = racing.ClientAPI(
+            "deluge-test",
+            {"client": "deluge", "host": "127.0.0.1:58846"},
+        )
+        api.rpc = FakeRPC()
+        torrents = api.torrents()
+
+        self.assertEqual(torrents[0]["hash"], "abc123")
+        self.assertEqual(torrents[0]["name"], "seeded")
+        method, args = calls[0]
+        self.assertEqual(method, "core.get_torrents_status")
+        self.assertEqual(args[0], {})
+        self.assertNotIn("hash", args[1])
+        self.assertIn("upload_payload_rate", args[1])
+
+
 if __name__ == "__main__":
     unittest.main()
