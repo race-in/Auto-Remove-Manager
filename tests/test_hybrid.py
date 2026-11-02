@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from hybrid import ModeTracker
+from hybrid import ModeTracker, _normal_removal_allowed
 
 
 class ModeTrackerTests(unittest.TestCase):
@@ -66,6 +66,49 @@ class ModeTrackerTests(unittest.TestCase):
         self.assertIsNone(tracker.sample(110_000_000, 13))
         self.assertIsNone(tracker.sample(110_000_000, 17.9))
         self.assertEqual(tracker.sample(110_000_000, 18), "racing")
+
+
+
+class NormalRemovalSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.task = {"delete_data": True}
+        self.safe_hybrid = {
+            "preview_only": False,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+        }
+        self.safe_global = {
+            "preview_only": False,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+        }
+
+    def test_all_safeguards_are_required_for_payload_deletion(self):
+        self.assertTrue(_normal_removal_allowed(
+            self.task, self.safe_hybrid, self.safe_global
+        ))
+
+    def test_hybrid_removal_switch_is_required(self):
+        hybrid = dict(self.safe_hybrid, allow_removal=False)
+        self.assertFalse(_normal_removal_allowed(self.task, hybrid, self.safe_global))
+
+    def test_hybrid_payload_switch_is_required(self):
+        hybrid = dict(self.safe_hybrid, allow_data_deletion=False)
+        self.assertFalse(_normal_removal_allowed(self.task, hybrid, self.safe_global))
+
+    def test_global_safety_switches_are_required(self):
+        for key, value in (("preview_only", True), ("allow_removal", False),
+                           ("allow_data_deletion", False)):
+            settings = dict(self.safe_global, **{key: value})
+            self.assertFalse(_normal_removal_allowed(
+                self.task, self.safe_hybrid, settings
+            ))
+
+    def test_non_payload_removal_does_not_need_payload_opt_in(self):
+        task = {"delete_data": False}
+        hybrid = dict(self.safe_hybrid, allow_data_deletion=False)
+        settings = dict(self.safe_global, allow_data_deletion=False)
+        self.assertTrue(_normal_removal_allowed(task, hybrid, settings))
 
 
 if __name__ == "__main__":
