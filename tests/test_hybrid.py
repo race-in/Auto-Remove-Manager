@@ -47,6 +47,26 @@ class ModeTrackerTests(unittest.TestCase):
         self.assertIsNone(tracker.sample(110_000_000, 8.9))
         self.assertEqual(tracker.sample(110_000_000, 9), "racing")
 
+    def test_recovery_state_requires_fresh_high_streak(self):
+        tracker = ModeTracker(100_000_000, 5, initial_mode=None)
+        self.assertIsNone(tracker.sample(110_000_000, 10))
+        self.assertIsNone(tracker.sample(110_000_000, 14.9))
+        self.assertEqual(tracker.sample(110_000_000, 15), "racing")
+
+    def test_recovery_state_requires_fresh_low_streak(self):
+        tracker = ModeTracker(100_000_000, 5, initial_mode=None)
+        self.assertIsNone(tracker.sample(90_000_000, 10))
+        self.assertIsNone(tracker.sample(90_000_000, 14.9))
+        self.assertEqual(tracker.sample(90_000_000, 15), "normal")
+
+    def test_recovery_state_high_dip_resets_classification(self):
+        tracker = ModeTracker(100_000_000, 5, initial_mode=None)
+        self.assertIsNone(tracker.sample(110_000_000, 10))
+        self.assertIsNone(tracker.sample(90_000_000, 12))
+        self.assertIsNone(tracker.sample(110_000_000, 13))
+        self.assertIsNone(tracker.sample(110_000_000, 17.9))
+        self.assertEqual(tracker.sample(110_000_000, 18), "racing")
+
 
 if __name__ == "__main__":
     unittest.main()
