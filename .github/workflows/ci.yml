@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/hybrid-auto-remove]
+    branches: [main]
   pull_request:
-    branches: [main, feature/hybrid-auto-remove]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
