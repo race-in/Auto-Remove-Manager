@@ -9,6 +9,7 @@ import math
 import os
 import pathlib
 import time
+import threading
 from typing import Any
 
 MB = 1_000_000
@@ -256,7 +257,7 @@ def _client_specs(tasks: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 
 def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                 state_dir: pathlib.Path, log_dir: pathlib.Path) -> int:
-    """Monitor each configured qBittorrent/Deluge task independently until stopped."""
+    """Monitor every configured client task in its own independent worker."""
     logger = make_logger(log_dir)
     download_mb = float(config.get("download_threshold_mb", DEFAULT_DOWNLOAD_THRESHOLD_MB))
     upload_mb = float(config.get("upload_max_mb", DEFAULT_UPLOAD_MAX_MB))
@@ -276,107 +277,127 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
         logger.error("No qBittorrent or Deluge tasks are configured.")
         return 2
 
-    monitors = {}
-    for name, task_conf in specs:
-        monitors[name] = {
-            "conf": task_conf,
-            "client": None,
-            "gate": SpeedGate(download_mb * MB, sustain),
-            "last_error": None,
-        }
-    logger.info(
-        "Racing Mode started: download >= %.2f MB/s for %.1f s; "
-        "eligible seed upload <= %.2f MB/s, ratio >= %.2f; poll %.1f s.",
-        download_mb, sustain, upload_mb, ratio_min, poll,
-    )
-    logger.info("Seeding time is not evaluated. Payload deletion is enabled only when removal safeguards allow it.")
+    stop = threading.Event()
 
-    try:
-        while True:
-            cycle_started = time.monotonic()
-            for name, state in monitors.items():
-                client = state["client"]
+    def monitor_one(name: str, task_conf: dict[str, Any]) -> None:
+        client = None
+        gate = SpeedGate(download_mb * MB, sustain)
+        last_error = None
+        client_type = str(task_conf.get("client", "")).lower()
+        logger.info(
+            "%s (%s): independent monitor started; threshold %.2f MB/s for %.1f s.",
+            name, client_type, download_mb, sustain,
+        )
+        try:
+            while not stop.is_set():
+                cycle_started = time.monotonic()
                 try:
                     if client is None:
-                        client = ClientAPI(name, state["conf"])
+                        client = ClientAPI(name, task_conf)
                         client.connect()
-                        state["client"] = client
                         logger.info("%s (%s): API authenticated and read-only state verified.",
                                     name, client.client)
                     speed = client.download_speed()
-                    should_trigger = state["gate"].sample(speed, time.monotonic())
-                    state["last_error"] = None
-                    if not should_trigger:
-                        continue
-
-                    logger.warning(
-                        "%s (%s): download threshold sustained for %.1f seconds at %.2f MB/s.",
-                        name, client.client, sustain, speed / MB,
-                    )
-                    torrents = client.torrents()
-                    candidates = eligible_torrents(
-                        client.client, torrents, ratio_min, upload_mb * MB
-                    )
-                    if not candidates:
-                        logger.info("%s: no eligible seeding torrents found.", name)
-                        continue
-
-                    for item in candidates:
-                        logger.info(
-                            "%s: eligible name=%r hash=%s ratio=%.3f upload=%.3f MB/s",
-                            name, str(item.get("name", ""))[:160], item.get("hash"),
-                            float(item.get("ratio")), (
-                                float(item.get("upspeed") if client.client == "qbittorrent"
-                                      else item.get("upload_payload_rate")) / MB
-                            ),
-                        )
-
-                    preview_only = bool(config.get("preview_only", True))
-                    allow_removal = bool(config.get("allow_removal", False))
-                    allow_data_deletion = bool(config.get("allow_data_deletion", False))
-                    if preview_only or not allow_removal or not allow_data_deletion:
+                    should_trigger = gate.sample(speed, time.monotonic())
+                    last_error = None
+                    if should_trigger:
                         logger.warning(
-                            "%s: PREVIEW ONLY — %d eligible torrent(s); no data was removed. "
-                            "Enable all Racing Mode safeguards explicitly to delete.",
-                            name, len(candidates),
+                            "%s (%s): download threshold sustained for %.1f seconds at %.2f MB/s.",
+                            name, client.client, sustain, speed / MB,
                         )
-                        continue
+                        torrents = client.torrents()
+                        candidates = eligible_torrents(
+                            client.client, torrents, ratio_min, upload_mb * MB
+                        )
+                        if not candidates:
+                            logger.info("%s: no eligible seeding torrents found.", name)
+                        else:
+                            for item in candidates:
+                                upload = (item.get("upspeed") if client.client == "qbittorrent"
+                                          else item.get("upload_payload_rate"))
+                                logger.info(
+                                    "%s: eligible name=%r hash=%s ratio=%.3f upload=%.3f MB/s",
+                                    name, str(item.get("name", ""))[:160], item.get("hash"),
+                                    float(item["ratio"]), float(upload) / MB,
+                                )
 
-                    lock = _try_run_lock(state_dir)
-                    if lock is None:
-                        logger.warning("%s: another manager cleanup is active; this trigger was skipped.", name)
-                        continue
-                    try:
-                        hashes = [str(item["hash"]) for item in candidates]
-                        succeeded, failed = client.remove_with_data(hashes)
-                        logger.warning(
-                            "%s: removed %d torrent(s) with payload data; %d failure(s).",
-                            name, len(succeeded), len(failed),
-                        )
-                        for failed_hash in failed:
-                            logger.error("%s: removal failed for hash=%s", name, failed_hash)
-                    finally:
-                        lock.close()
-                except KeyboardInterrupt:
-                    raise
+                            preview_only = bool(config.get("preview_only", True))
+                            allow_removal = bool(config.get("allow_removal", False))
+                            allow_data_deletion = bool(config.get("allow_data_deletion", False))
+                            if preview_only or not allow_removal or not allow_data_deletion:
+                                logger.warning(
+                                    "%s: PREVIEW ONLY — %d eligible torrent(s); no data was removed. "
+                                    "Enable all Racing Mode safeguards explicitly to delete.",
+                                    name, len(candidates),
+                                )
+                            else:
+                                lock = _try_run_lock(state_dir)
+                                if lock is None:
+                                    logger.warning(
+                                        "%s: another manager cleanup is active; will retry after another 5-second trigger.",
+                                        name,
+                                    )
+                                    gate.started_at = None
+                                    gate.triggered = False
+                                else:
+                                    try:
+                                        hashes = [str(item["hash"]) for item in candidates]
+                                        succeeded, failed = client.remove_with_data(hashes)
+                                        logger.warning(
+                                            "%s: removed %d torrent(s) with payload data; %d failure(s).",
+                                            name, len(succeeded), len(failed),
+                                        )
+                                        for failed_hash in failed:
+                                            logger.error("%s: removal failed for hash=%s", name, failed_hash)
+                                        if failed:
+                                            gate.started_at = None
+                                            gate.triggered = False
+                                    finally:
+                                        lock.close()
                 except Exception as exc:
-                    # A failed sample breaks the 5-second streak. The other
-                    # client's monitor continues independently.
-                    state["gate"].sample(None, time.monotonic())
-                    if state["client"] is not None:
-                        state["client"].close()
-                        state["client"] = None
+                    # A failed sample breaks this client's threshold streak only.
+                    gate.sample(None, time.monotonic())
+                    if client is not None:
+                        client.close()
+                        client = None
                     error = type(exc).__name__
-                    if state["last_error"] != error:
+                    if last_error != error:
                         logger.error("%s: API unavailable/unverified (%s); no deletion. Retrying.",
                                      name, error)
-                        state["last_error"] = error
-            elapsed = time.monotonic() - cycle_started
-            time.sleep(max(0.0, poll - elapsed))
+                        last_error = error
+                elapsed = time.monotonic() - cycle_started
+                stop.wait(max(0.0, poll - elapsed))
+        finally:
+            if client is not None:
+                client.close()
+            logger.info("%s: monitor worker stopped.", name)
+
+    workers = [
+        threading.Thread(target=monitor_one, args=(name, task_conf),
+                         name="racing-" + name, daemon=False)
+        for name, task_conf in specs
+    ]
+    logger.info(
+        "Racing Mode active: %.2f MB/s download for %.1f s; eligible seed upload <= %.2f MB/s, "
+        "ratio >= %.2f; poll %.1f s. Seeding time is ignored.",
+        download_mb, sustain, upload_mb, ratio_min, poll,
+    )
+    logger.info(
+        "Payload deletion safeguards: preview_only=%s allow_removal=%s allow_data_deletion=%s.",
+        bool(config.get("preview_only", True)),
+        bool(config.get("allow_removal", False)),
+        bool(config.get("allow_data_deletion", False)),
+    )
+    for worker in workers:
+        worker.start()
+    try:
+        while any(worker.is_alive() for worker in workers):
+            for worker in workers:
+                worker.join(timeout=0.5)
     except KeyboardInterrupt:
+        logger.info("Stopping Racing Mode workers...")
+        stop.set()
+        for worker in workers:
+            worker.join(timeout=10)
         logger.info("Racing Mode stopped by user.")
-        return 0
-    finally:
-        for state in monitors.values():
-            if state["client"] is not None:
-                state["client"].close()
+    return 0
