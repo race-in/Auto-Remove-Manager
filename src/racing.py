@@ -231,10 +231,8 @@ class ClientAPI:
             deadline = time.monotonic() + QB_DELETE_VERIFY_TIMEOUT
 
             while remaining_hashes:
-                # The server-side delete request cannot be reliably cancelled.
-                # Stop verification and conservatively report unverified hashes.
-                if stop_event is not None and stop_event.is_set():
-                    break
+                # Once accepted, this batch must be verified before the caller
+                # releases its shared cleanup lock, even during shutdown.
                 current_hashes = {
                     str(item.get("hash", "")).lower()
                     for item in self.torrents()
