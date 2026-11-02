@@ -513,10 +513,27 @@ def load_upstream_yaml(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
+def find_upstream_executable() -> str | None:
+    """Find ART in the active virtualenv before falling back to PATH."""
+    candidates = (
+        pathlib.Path(sys.prefix) / "bin" / "autoremove-torrents",
+        pathlib.Path(sys.executable).absolute().parent / "autoremove-torrents",
+    )
+    seen: set[str] = set()
+    for candidate in candidates:
+        path = str(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        if candidate.is_file() and os.access(path, os.X_OK):
+            return path
+    return shutil.which("autoremove-torrents")
+
+
 def invoke_upstream(args: argparse.Namespace, preview: bool) -> int:
-    executable = shutil.which("autoremove-torrents")
+    executable = find_upstream_executable()
     if not executable:
-        print("autoremove-torrents executable not found in PATH.", file=sys.stderr)
+        print("autoremove-torrents executable not found in the active environment or PATH.", file=sys.stderr)
         return 127
     args.log_dir.mkdir(parents=True, exist_ok=True)
     # Run the upstream console script under this interpreter with the qBittorrent
