@@ -361,7 +361,15 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                         latest_candidates = eligible_torrents(
                                             client.client, latest, ratio_min, upload_mb * MB
                                         )
-                                        hashes = [str(item["hash"]) for item in latest_candidates]
+                                        # Never delete a torrent that was not in the
+                                        # original eligibility snapshot for this trigger.
+                                        preview_hashes = {
+                                            str(item["hash"]) for item in candidates
+                                        }
+                                        hashes = [
+                                            str(item["hash"]) for item in latest_candidates
+                                            if str(item["hash"]) in preview_hashes
+                                        ]
                                         if not hashes:
                                             logger.info(
                                                 "%s: candidates no longer match on final verification; nothing removed.",
