@@ -251,6 +251,18 @@ data = {
         "ratio_min": 1.0,
         "sustain_seconds": 5.0,
         "poll_interval_seconds": 1.0
+    },
+    "hybrid": {
+        "enabled": False,
+        "preview_only": True,
+        "allow_removal": False,
+        "allow_data_deletion": False,
+        "download_threshold_mb": 100.0,
+        "upload_max_mb": 10.0,
+        "ratio_min": 1.0,
+        "sustain_seconds": 5.0,
+        "poll_interval_seconds": 1.0,
+        "cleanup_interval_seconds": 60.0
     }
 }
 fd, tmp = tempfile.mkstemp(prefix=".manager-", dir=os.path.dirname(path), text=True)
