@@ -484,6 +484,16 @@ def configure_clients(mode: str, upstream_config: pathlib.Path, log_dir: pathlib
     return 0
 
 
+def explicitly_enabled(value: Any) -> bool:
+    """Only a JSON boolean true enables a safety-sensitive option."""
+    return value is True
+
+
+def explicitly_disabled(value: Any) -> bool:
+    """Only a JSON boolean false disables a preview safeguard."""
+    return value is False
+
+
 def _validate_boolean_fields(value: dict[str, Any], fields: tuple[str, ...],
                              context: str) -> None:
     """Reject non-JSON-boolean values in safety-sensitive configuration."""
