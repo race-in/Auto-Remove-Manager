@@ -75,6 +75,37 @@ class EligibilityTests(unittest.TestCase):
 
 
 
+class RevalidationTests(unittest.TestCase):
+    def test_only_original_candidates_still_eligible_are_returned(self):
+        preview = [
+            {"hash": "keep", "state": "uploading", "ratio": 1.2, "upspeed": 0},
+            {"hash": "stale", "state": "uploading", "ratio": 1.2, "upspeed": 0},
+        ]
+        latest = [
+            {"hash": "keep", "state": "uploading", "ratio": 1.2, "upspeed": 0},
+            {"hash": "stale", "state": "downloading", "ratio": 1.2, "upspeed": 0},
+            {"hash": "new", "state": "uploading", "ratio": 2.0, "upspeed": 0},
+        ]
+        self.assertEqual(
+            racing.revalidated_hashes("qbittorrent", preview, latest),
+            ["keep"],
+        )
+
+    def test_ratio_or_upload_change_revokes_eligibility(self):
+        preview = [
+            {"hash": "ratio", "state": "uploading", "ratio": 1.1, "upspeed": 0},
+            {"hash": "upload", "state": "uploading", "ratio": 1.1, "upspeed": 0},
+        ]
+        latest = [
+            {"hash": "ratio", "state": "uploading", "ratio": 0.9, "upspeed": 0},
+            {"hash": "upload", "state": "uploading", "ratio": 1.1, "upspeed": 11_000_000},
+        ]
+        self.assertEqual(
+            racing.revalidated_hashes("qbittorrent", preview, latest),
+            [],
+        )
+
+
 class QbittorrentConnectionTests(unittest.TestCase):
     def test_authentication_precedes_plain_text_version_check(self):
         from unittest.mock import patch
