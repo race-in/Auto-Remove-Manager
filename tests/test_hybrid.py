@@ -126,6 +126,31 @@ class HybridCleanupSafetyTests(unittest.TestCase):
         self.state_dir = pathlib.Path(self.tempdir.name)
         self.logger = Mock()
 
+    def test_hybrid_honors_preexisting_supervisor_stop_event(self):
+        import threading
+        from hybrid import run_hybrid
+
+        stop = threading.Event()
+        stop.set()
+        args = Namespace(state_dir=self.state_dir, log_dir=self.state_dir / "logs")
+        task = {"client": "qbittorrent", "host": "http://127.0.0.1:9001"}
+        config = {
+            "download_threshold_mb": 100.0, "sustain_seconds": 5.0,
+            "poll_interval_seconds": 0.01, "cleanup_interval_seconds": 60.0,
+            "ratio_min": 1.0, "upload_max_mb": 10.0,
+        }
+        with patch("hybrid.racing.make_logger", return_value=self.logger), patch(
+            "hybrid.racing.ClientAPI"
+        ) as client_api:
+            result = run_hybrid(
+                {"qb": task}, config, args,
+                {"preview_only": True, "allow_removal": False,
+                 "allow_data_deletion": False},
+                stop_event=stop,
+            )
+        self.assertEqual(result, 0)
+        client_api.assert_not_called()
+
     def test_racing_preview_never_calls_payload_removal(self):
         torrent = {
             "hash": "abc123",
