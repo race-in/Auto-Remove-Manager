@@ -227,7 +227,12 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 
 export PIP_NO_CACHE_DIR=1
-"$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
+if "$VENV/bin/python" -c 'import sys; raise SystemExit(sys.version_info < (3,9))'; then
+  "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
+else
+  # pip 25+ dropped Python 3.8; keep the last compatible pip line on legacy hosts.
+  "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade "pip<25"
+fi
 "$VENV/bin/python" -m pip install --disable-pip-version-check -r "$BASE/requirements.txt"
 
 if [[ ! -f "$CONFIG_DIR/manager.json" ]]; then
