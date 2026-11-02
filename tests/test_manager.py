@@ -10,6 +10,28 @@ import manager
 
 
 class ManagerTests(unittest.TestCase):
+    def test_upstream_executable_is_found_in_active_virtualenv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = pathlib.Path(tmp)
+            bindir = venv / "bin"
+            bindir.mkdir()
+            executable = bindir / "autoremove-torrents"
+            executable.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch.object(manager.sys, "prefix", str(venv)), mock.patch.object(
+                manager.sys, "executable", str(bindir / "python")
+            ), mock.patch.object(manager.shutil, "which", return_value=None):
+                self.assertEqual(manager.find_upstream_executable(), str(executable))
+
+    def test_upstream_executable_falls_back_to_path(self):
+        with mock.patch.object(manager.sys, "prefix", "/missing/venv"), mock.patch.object(
+            manager.sys, "executable", "/missing/venv/bin/python"
+        ), mock.patch.object(manager.shutil, "which", return_value="/usr/local/bin/autoremove-torrents"):
+            self.assertEqual(
+                manager.find_upstream_executable(),
+                "/usr/local/bin/autoremove-torrents",
+            )
+
     def test_detection_reports_api_as_unverified(self):
         with mock.patch.object(manager, "process_inventory", return_value=[
             {"user": "seed", "command": "qbittorrent-nox", "args": "qbittorrent-nox"}
