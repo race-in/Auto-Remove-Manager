@@ -62,6 +62,13 @@ def eligible_torrents(client: str, torrents: list[dict[str, Any]],
     return selected
 
 
+def removal_authorized(config: dict[str, Any]) -> bool:
+    """Require real JSON booleans; truthy strings must never enable deletion."""
+    return (config.get("preview_only", True) is False
+            and config.get("allow_removal", False) is True
+            and config.get("allow_data_deletion", False) is True)
+
+
 def revalidated_hashes(client: str, preview_candidates: list[dict[str, Any]],
                        latest_torrents: list[dict[str, Any]], ratio_min: float = 1.0,
                        upload_max_bytes: float = DEFAULT_UPLOAD_MAX_MB * MB) -> list[str]:
@@ -211,8 +218,20 @@ class ClientAPI:
             self._qb_post("/api/v2/torrents/delete", {
                 "hashes": "|".join(torrent_hashes), "deleteFiles": "true",
             })
-            # qBittorrent's API returns HTTP 200 for an accepted batch.
-            return list(torrent_hashes), []
+            # HTTP success only confirms acceptance; verify disappearance via API.
+            requested = list(dict.fromkeys(str(value) for value in torrent_hashes))
+            for attempt in range(3):
+                try:
+                    remaining = {str(item.get("hash")) for item in self.torrents()
+                                 if isinstance(item, dict) and item.get("hash")}
+                except Exception:
+                    return [], requested
+                confirmed = [value for value in requested if value not in remaining]
+                if len(confirmed) == len(requested):
+                    return confirmed, []
+                if attempt < 2:
+                    time.sleep(0.25)
+            return confirmed, [value for value in requested if value not in confirmed]
 
         succeeded = []
         failed = []
@@ -352,10 +371,7 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                     float(item["ratio"]), float(upload) / MB,
                                 )
 
-                            preview_only = bool(config.get("preview_only", True))
-                            allow_removal = bool(config.get("allow_removal", False))
-                            allow_data_deletion = bool(config.get("allow_data_deletion", False))
-                            if preview_only or not allow_removal or not allow_data_deletion:
+                            if not removal_authorized(config):
                                 logger.warning(
                                     "%s: PREVIEW ONLY — %d eligible torrent(s); no data was removed. "
                                     "Enable all Racing Mode safeguards explicitly to delete.",
@@ -389,11 +405,11 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                         else:
                                             succeeded, failed = client.remove_with_data(hashes)
                                             logger.warning(
-                                                "%s: removed %d torrent(s) with payload data; %d failure(s).",
+                                                "%s: confirmed removed %d torrent(s) with payload data; %d removal(s) not confirmed.",
                                                 name, len(succeeded), len(failed),
                                             )
                                             for failed_hash in failed:
-                                                logger.error("%s: removal failed for hash=%s", name, failed_hash)
+                                                logger.error("%s: removal not confirmed for hash=%s", name, failed_hash)
                                             if failed:
                                                 gate.started_at = None
                                                 gate.triggered = False
@@ -429,9 +445,9 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
     )
     logger.info(
         "Payload deletion safeguards: preview_only=%s allow_removal=%s allow_data_deletion=%s.",
-        bool(config.get("preview_only", True)),
-        bool(config.get("allow_removal", False)),
-        bool(config.get("allow_data_deletion", False)),
+        config.get("preview_only", True) is not False,
+        config.get("allow_removal", False) is True,
+        config.get("allow_data_deletion", False) is True,
     )
     for worker in workers:
         worker.start()
