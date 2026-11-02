@@ -248,7 +248,7 @@ class ManagerTests(unittest.TestCase):
             0,
         ]
         with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
-            manager.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
+            manager.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 2.0]
         ):
             manager._terminate_child_process(process, grace_seconds=1)
         self.assertEqual(killpg.call_args_list, [
@@ -301,7 +301,7 @@ class ManagerTests(unittest.TestCase):
         ]
 
         with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
-            manager.time, "monotonic", side_effect=[0.0, 0.0]
+            manager.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
         ):
             manager._terminate_child_process(process, grace_seconds=1)
 
