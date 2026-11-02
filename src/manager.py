@@ -597,7 +597,7 @@ def _terminate_child_process(process, grace_seconds: float = 10.0) -> None:
         if remaining <= 0:
             break
         try:
-            process.wait(timeout=min(0.25, remaining))
+            process.wait(timeout=remaining)
             break
         except subprocess.TimeoutExpired:
             continue
