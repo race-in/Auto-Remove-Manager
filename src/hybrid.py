@@ -122,7 +122,7 @@ def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
 
 
 def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
-                    state_dir: pathlib.Path, logger) -> None:
+                    settings: dict[str, Any], state_dir: pathlib.Path, logger) -> None:
     """Evaluate Racing candidates under the same lock used by Normal cleanup."""
     lock = manager.acquire_lock(state_dir)
     if lock is None:
@@ -141,7 +141,10 @@ def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
                         name, str(item.get("name", ""))[:120],
                         float(item["ratio"]), float(upload) / MB)
         deletion = (
-            not bool(config.get("preview_only", True))
+            not bool(settings.get("preview_only", True))
+            and bool(settings.get("allow_removal", False))
+            and bool(settings.get("allow_data_deletion", False))
+            and not bool(config.get("preview_only", True))
             and bool(config.get("allow_removal", False))
             and bool(config.get("allow_data_deletion", False))
         )
@@ -209,7 +212,7 @@ def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
                     if tracker.mode == "normal":
                         _normal_cleanup(name, task, args, config, settings, logger)
                     else:
-                        _racing_cleanup(name, api, config, args.state_dir, logger)
+                        _racing_cleanup(name, api, config, settings, args.state_dir, logger)
                     next_cleanup = time.monotonic() + interval
             except Exception as exc:
                 logger.error("%s: API/worker error (%s); cleanup suspended and streak reset.",
