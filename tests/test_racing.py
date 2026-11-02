@@ -74,5 +74,64 @@ class EligibilityTests(unittest.TestCase):
             racing.eligible_torrents("transmission", [])
 
 
+
+class QbittorrentConnectionTests(unittest.TestCase):
+    def test_authentication_precedes_plain_text_version_check(self):
+        from unittest.mock import patch
+
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, status_code=200, text="", json_data=None):
+                self.status_code = status_code
+                self.text = text
+                self.json_data = json_data
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                if self.json_data is None:
+                    raise AssertionError("Unexpected JSON parsing")
+                return self.json_data
+
+        class FakeSession:
+            trust_env = True
+
+            def post(self, url, **kwargs):
+                calls.append(("POST", url))
+                return FakeResponse(status_code=204)
+
+            def get(self, url, **kwargs):
+                calls.append(("GET", url))
+                if url.endswith("/api/v2/app/webapiVersion"):
+                    return FakeResponse(text="2.16.2")
+                if url.endswith("/api/v2/transfer/info"):
+                    return FakeResponse(json_data={"dl_info_speed": 0})
+                raise AssertionError("Unexpected endpoint: " + url)
+
+        session = FakeSession()
+
+        with patch("requests.Session", return_value=session):
+            api = racing.ClientAPI(
+                "test-qb",
+                {
+                    "client": "qbittorrent",
+                    "host": "http://127.0.0.1:9001",
+                    "username": "test",
+                    "password": "test",
+                },
+            )
+            api.connect()
+
+        self.assertEqual(
+            [method for method, _ in calls],
+            ["POST", "GET", "GET"],
+        )
+        self.assertTrue(calls[0][1].endswith("/api/v2/auth/login"))
+        self.assertTrue(calls[1][1].endswith("/api/v2/app/webapiVersion"))
+        self.assertTrue(calls[2][1].endswith("/api/v2/transfer/info"))
+
+
 if __name__ == "__main__":
     unittest.main()

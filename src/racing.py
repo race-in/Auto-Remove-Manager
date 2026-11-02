@@ -108,10 +108,8 @@ class ClientAPI:
             import requests
             self.session = requests.Session()
             self.session.trust_env = True
-            version = self.session.get(
-                self.host.rstrip("/") + "/api/v2/app/webapiVersion", timeout=(3, 8)
-            )
-            version.raise_for_status()
+            # Authenticate first: some qBittorrent WebUI configurations
+            # reject unauthenticated requests to the version endpoint.
             response = self.session.post(
                 self.host.rstrip("/") + "/api/v2/auth/login",
                 data={"username": self.username, "password": self.password},
@@ -119,6 +117,16 @@ class ClientAPI:
             )
             if response.status_code not in (200, 204) or response.text.strip() == "Fails.":
                 raise RuntimeError("qBittorrent authentication failed.")
+
+            # The version endpoint returns plain text, not JSON.
+            version = self.session.get(
+                self.host.rstrip("/") + "/api/v2/app/webapiVersion",
+                timeout=(3, 8),
+            )
+            version.raise_for_status()
+            if not version.text.strip():
+                raise RuntimeError("qBittorrent returned an empty WebAPI version.")
+
             # Verify the authenticated session by reading transfer state.
             self._qb_get("/api/v2/transfer/info")
             return
