@@ -20,7 +20,7 @@ DEFAULT_POLL_INTERVAL = 1.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 1
 QB_DELETE_VERIFY_TIMEOUT = 5.0
-QB_DELETE_VERIFY_INTERVAL = 0.5
+QB_DELETE_VERIFY_INTERVAL = 0.25
 
 QB_SEED_STATES = frozenset(("uploading", "stalledup", "queuedup", "forcedup"))
 
@@ -233,9 +233,15 @@ class ClientAPI:
             while remaining_hashes:
                 # Once accepted, this batch must be verified before the caller
                 # releases its shared cleanup lock, even during shutdown.
+                try:
+                    current_torrents = self.torrents()
+                except Exception:
+                    # The delete request may have completed, but without a
+                    # successful verification read no removal can be confirmed.
+                    return [], requested
                 current_hashes = {
                     str(item.get("hash", "")).lower()
-                    for item in self.torrents()
+                    for item in current_torrents
                 }
                 remaining_hashes.intersection_update(current_hashes)
 
@@ -326,6 +332,11 @@ def _client_specs(tasks: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             specs.append((name, conf))
     return specs
 
+
+
+def removal_authorized(config: dict[str, Any]) -> bool:
+    """Public compatibility wrapper for the fail-closed Racing safety gate."""
+    return _removal_authorized(config)
 
 
 def _removal_authorized(config: dict[str, Any]) -> bool:
