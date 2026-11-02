@@ -19,6 +19,8 @@ DEFAULT_SUSTAIN_SECONDS = 5.0
 DEFAULT_POLL_INTERVAL = 1.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 1
+QB_DELETE_VERIFY_TIMEOUT = 5.0
+QB_DELETE_VERIFY_INTERVAL = 0.25
 
 QB_SEED_STATES = frozenset(("uploading", "stalledup", "queuedup", "forcedup"))
 
@@ -60,13 +62,6 @@ def eligible_torrents(client: str, torrents: list[dict[str, Any]],
         if ratio >= ratio_min and 0 <= upload <= upload_max_bytes:
             selected.append(torrent)
     return selected
-
-
-def removal_authorized(config: dict[str, Any]) -> bool:
-    """Require real JSON booleans; truthy strings must never enable deletion."""
-    return (config.get("preview_only", True) is False
-            and config.get("allow_removal", False) is True
-            and config.get("allow_data_deletion", False) is True)
 
 
 def revalidated_hashes(client: str, preview_candidates: list[dict[str, Any]],
@@ -162,6 +157,7 @@ class ClientAPI:
         self.rpc = DelugeRPCClient(
             host, int(port_text), self.username, self.password,
             decode_utf8=True,
+            timeout=8,
         )
         self.rpc.connect()
         # Verify authentication and the expected session API before monitoring.
@@ -195,9 +191,17 @@ class ClientAPI:
             result = self._qb_get("/api/v2/torrents/info")
             if not isinstance(result, list):
                 raise RuntimeError("qBittorrent returned an invalid torrent list.")
+            for index, item in enumerate(result):
+                if not isinstance(item, dict):
+                    raise RuntimeError("qBittorrent returned a malformed torrent entry at index {}.".format(index))
+                torrent_hash = item.get("hash")
+                if not isinstance(torrent_hash, str) or not torrent_hash.strip():
+                    raise RuntimeError("qBittorrent returned a torrent entry without a valid hash.")
             return result
+        # Deluge returns torrent hashes as mapping keys; "hash" is not a
+        # TorrentStatus field and must not be requested in the keys list.
         result = self.rpc.call("core.get_torrents_status", {}, [
-            "hash", "name", "state", "ratio", "upload_payload_rate",
+            "name", "state", "ratio", "upload_payload_rate",
         ])
         if not isinstance(result, dict):
             raise RuntimeError("Deluge returned an invalid torrent list.")
@@ -210,33 +214,61 @@ class ClientAPI:
             torrents.append(item)
         return torrents
 
-    def remove_with_data(self, torrent_hashes: list[str]) -> tuple[list[str], list[str]]:
+    def remove_with_data(self, torrent_hashes: list[str], stop_event=None) -> tuple[list[str], list[str]]:
         """Remove selected hashes and payload data; never called in preview mode."""
         if not torrent_hashes:
             return [], []
         if self.client == "qbittorrent":
+            requested = [str(torrent_hash) for torrent_hash in torrent_hashes]
+            if stop_event is not None and stop_event.is_set():
+                return [], requested
             self._qb_post("/api/v2/torrents/delete", {
-                "hashes": "|".join(torrent_hashes), "deleteFiles": "true",
+                "hashes": "|".join(requested), "deleteFiles": "true",
             })
-            # HTTP success only confirms acceptance; verify disappearance via API.
-            requested = list(dict.fromkeys(str(value) for value in torrent_hashes))
-            for attempt in range(3):
+            # HTTP 200 acknowledges the request, not completion.
+            # Poll because qBittorrent may process deletion asynchronously.
+            remaining_hashes = {h.lower() for h in requested}
+            deadline = time.monotonic() + QB_DELETE_VERIFY_TIMEOUT
+
+            while remaining_hashes:
+                # Once accepted, this batch must be verified before the caller
+                # releases its shared cleanup lock, even during shutdown.
                 try:
-                    remaining = {str(item.get("hash")) for item in self.torrents()
-                                 if isinstance(item, dict) and item.get("hash")}
+                    current_torrents = self.torrents()
                 except Exception:
+                    # The delete request may have completed, but without a
+                    # successful verification read no removal can be confirmed.
                     return [], requested
-                confirmed = [value for value in requested if value not in remaining]
-                if len(confirmed) == len(requested):
-                    return confirmed, []
-                if attempt < 2:
-                    time.sleep(0.25)
-            return confirmed, [value for value in requested if value not in confirmed]
+                current_hashes = {
+                    str(item.get("hash", "")).lower()
+                    for item in current_torrents
+                }
+                remaining_hashes.intersection_update(current_hashes)
+
+                if not remaining_hashes:
+                    break
+
+                wait_left = deadline - time.monotonic()
+                if wait_left <= 0:
+                    break
+
+                time.sleep(min(QB_DELETE_VERIFY_INTERVAL, wait_left))
+
+            succeeded = [
+                h for h in requested if h.lower() not in remaining_hashes
+            ]
+            failed = [
+                h for h in requested if h.lower() in remaining_hashes
+            ]
+            return succeeded, failed
 
         succeeded = []
         failed = []
         # core.remove_torrent(hash, True) is compatible with Deluge 1.x and 2.x.
-        for torrent_hash in torrent_hashes:
+        for index, torrent_hash in enumerate(torrent_hashes):
+            if stop_event is not None and stop_event.is_set():
+                failed.extend(torrent_hashes[index:])
+                break
             try:
                 result = self.rpc.call("core.remove_torrent", torrent_hash, True)
                 if result is True:
@@ -299,6 +331,21 @@ def _client_specs(tasks: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         if client in ("qbittorrent", "deluge"):
             specs.append((name, conf))
     return specs
+
+
+
+def removal_authorized(config: dict[str, Any]) -> bool:
+    """Public compatibility wrapper for the fail-closed Racing safety gate."""
+    return _removal_authorized(config)
+
+
+def _removal_authorized(config: dict[str, Any]) -> bool:
+    """Only explicit JSON booleans may authorize Racing deletion."""
+    return (
+        config.get("preview_only", True) is False
+        and config.get("allow_removal") is True
+        and config.get("allow_data_deletion") is True
+    )
 
 
 def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
@@ -371,7 +418,7 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                     float(item["ratio"]), float(upload) / MB,
                                 )
 
-                            if not removal_authorized(config):
+                            if not _removal_authorized(config):
                                 logger.warning(
                                     "%s: PREVIEW ONLY — %d eligible torrent(s); no data was removed. "
                                     "Enable all Racing Mode safeguards explicitly to delete.",
@@ -391,8 +438,6 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                         # Re-read immediately before deletion so a stale
                                         # preview cannot authorize removal after state/ratio changes.
                                         latest = client.torrents()
-                                        # Never delete a torrent that was not in the
-                                        # original eligibility snapshot for this trigger.
                                         hashes = revalidated_hashes(
                                             client.client, candidates, latest,
                                             ratio_min, upload_mb * MB,
@@ -405,11 +450,11 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                         else:
                                             succeeded, failed = client.remove_with_data(hashes)
                                             logger.warning(
-                                                "%s: confirmed removed %d torrent(s) with payload data; %d removal(s) not confirmed.",
+                                                "%s: removed %d torrent(s) with payload data; %d failure(s).",
                                                 name, len(succeeded), len(failed),
                                             )
                                             for failed_hash in failed:
-                                                logger.error("%s: removal not confirmed for hash=%s", name, failed_hash)
+                                                logger.error("%s: removal failed for hash=%s", name, failed_hash)
                                             if failed:
                                                 gate.started_at = None
                                                 gate.triggered = False
@@ -446,8 +491,8 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
     logger.info(
         "Payload deletion safeguards: preview_only=%s allow_removal=%s allow_data_deletion=%s.",
         config.get("preview_only", True) is not False,
-        config.get("allow_removal", False) is True,
-        config.get("allow_data_deletion", False) is True,
+        config.get("allow_removal") is True,
+        config.get("allow_data_deletion") is True,
     )
     for worker in workers:
         worker.start()

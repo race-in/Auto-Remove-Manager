@@ -73,7 +73,8 @@ autoremove-manager detect
 autoremove-manager configure
 autoremove-manager test
 autoremove-manager preview
-autoremove-manager racing  # optional long-running monitor; disabled by default
+autoremove-manager racing  # standalone Racing monitor (legacy)
+autoremove-manager hybrid  # per-client automatic Normal/Racing switching
 autoremove-manager logs
 autoremove-manager uninstall
 ```
@@ -100,6 +101,18 @@ Scheduled runs remain preview-only until the same settings are deliberately chan
 Racing Mode is a separate, long-running monitor and is disabled by default. It samples each configured qBittorrent or Deluge client independently. A client's own download speed must remain at or above 100 MB/s for five seconds before that same client is evaluated. All of that client's seeding torrents with ratio >= 1.0 and live upload speed <= 10 MB/s are eligible; seeding time is ignored. Eligible torrents are removed with their payload data only after all three Racing Mode safety switches are deliberately enabled. API errors fail closed for the affected client and do not stop the other client's worker.
 
 Run `autoremove-manager racing` in a persistent terminal/session after enabling `racing.enabled`. The initial settings are preview-only and all deletion switches are off. See [Configuration](docs/CONFIGURATION.md) before enabling removal. The monitor is not automatically added to cron or systemd.
+
+## Hybrid Mode (per-client automatic switching)
+
+Hybrid Mode runs one independent worker for each configured qBittorrent or Deluge task. Each worker samples that client's aggregate download speed every second:
+
+- At or above 100 MB/s continuously for five seconds: that client switches from Normal to Racing.
+- Below 100 MB/s continuously for five seconds: that client switches back to Normal.
+- Racing cleanup uses ratio >= 1.0 and live upload <= 10 MB/s; seeding time is ignored.
+- Normal cleanup invokes the existing upstream YAML strategy unchanged, using a temporary task-only configuration so another client's mode cannot affect it.
+- Each client's cleanup cadence defaults to 60 seconds. A shared lock serializes cleanup operations, and API errors suspend cleanup for the affected client.
+
+Hybrid Mode is disabled by default and starts only with `autoremove-manager hybrid` after `hybrid.enabled=true`. Its own `preview_only` defaults to true. Keep it in preview mode while reviewing `racing.log`; actual removal requires the Hybrid removal switches plus the existing Normal-mode safety settings where applicable. Do not enable deletion until preview results have been verified.
 
 ## Uninstallation
 
