@@ -2,7 +2,7 @@ name: ShellCheck
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/hybrid-auto-remove]
   pull_request:
     branches: [main]
   workflow_dispatch:
