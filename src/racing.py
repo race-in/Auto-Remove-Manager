@@ -172,8 +172,10 @@ class ClientAPI:
             if not isinstance(result, list):
                 raise RuntimeError("qBittorrent returned an invalid torrent list.")
             return result
+        # Deluge returns torrent hashes as mapping keys; "hash" is not a
+        # TorrentStatus field and must not be requested in the keys list.
         result = self.rpc.call("core.get_torrents_status", {}, [
-            "hash", "name", "state", "ratio", "upload_payload_rate",
+            "name", "state", "ratio", "upload_payload_rate",
         ])
         if not isinstance(result, dict):
             raise RuntimeError("Deluge returned an invalid torrent list.")
