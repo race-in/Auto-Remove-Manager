@@ -22,10 +22,11 @@ MB = 1_000_000
 
 class ModeTracker:
     """Switch modes only after a continuous high/low speed streak."""
-    def __init__(self, threshold_bytes: float, sustain_seconds: float):
+    def __init__(self, threshold_bytes: float, sustain_seconds: float,
+                 initial_mode: str | None = "normal"):
         self.threshold = float(threshold_bytes)
         self.sustain = float(sustain_seconds)
-        self.mode = "normal"
+        self.mode = initial_mode
         self.high_since = None
         self.low_since = None
 
@@ -33,6 +34,26 @@ class ModeTracker:
         if not math.isfinite(speed) or speed < 0:
             self.high_since = None
             self.low_since = None
+            return None
+        # After an API outage, require a fresh uninterrupted five-second
+        # speed streak before allowing either cleanup strategy to run.
+        if self.mode is None:
+            if speed >= self.threshold:
+                self.low_since = None
+                if self.high_since is None:
+                    self.high_since = now
+                elif now - self.high_since >= self.sustain:
+                    self.mode = "racing"
+                    self.high_since = None
+                    return self.mode
+            else:
+                self.high_since = None
+                if self.low_since is None:
+                    self.low_since = now
+                elif now - self.low_since >= self.sustain:
+                    self.mode = "normal"
+                    self.low_since = None
+                    return self.mode
             return None
         if self.mode == "normal":
             self.low_since = None
@@ -184,7 +205,7 @@ def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
                                    name, changed.upper())
                     next_cleanup = 0.0
                 now = time.monotonic()
-                if now >= next_cleanup:
+                if tracker.mode is not None and now >= next_cleanup:
                     if tracker.mode == "normal":
                         _normal_cleanup(name, task, args, config, settings, logger)
                     else:
@@ -193,7 +214,10 @@ def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
             except Exception as exc:
                 logger.error("%s: API/worker error (%s); cleanup suspended and streak reset.",
                              name, type(exc).__name__)
-                tracker = ModeTracker(threshold, sustain)
+                tracker = ModeTracker(threshold, sustain, initial_mode=None)
+                # Never run Normal immediately after reconnect: wait for a
+                # fresh, continuous five-second classification first.
+                next_cleanup = float("inf")
                 if api is not None:
                     api.close()
                     api = None
