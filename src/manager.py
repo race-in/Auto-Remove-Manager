@@ -486,6 +486,11 @@ def load_json(path: pathlib.Path) -> dict[str, Any]:
         return {
             "schema_version": 1, "preview_only": True, "allow_removal": False,
             "allow_data_deletion": False, "schedule": {"enabled": False},
+            "racing": {"enabled": False, "preview_only": True,
+                       "allow_removal": False, "allow_data_deletion": False,
+                       "download_threshold_mb": 100.0, "upload_max_mb": 10.0,
+                       "ratio_min": 1.0, "sustain_seconds": 5.0,
+                       "poll_interval_seconds": 1.0},
         }
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -602,7 +607,7 @@ def main() -> int:
                         help="skip the interactive confirmation in the one-click uninstaller")
     parser.add_argument("command", nargs="?", default="status",
                         choices=("status", "detect", "configure", "test", "preview",
-                                 "scheduled", "run", "logs", "uninstall"))
+                                 "scheduled", "run", "racing", "logs", "uninstall"))
     args = parser.parse_args()
 
     # Uninstall must not depend on valid settings/YAML; it must still work after
@@ -634,6 +639,7 @@ def main() -> int:
             "allow_data_deletion": bool(settings.get("allow_data_deletion", False)),
             "configured_tasks": list(tasks.keys()),
             "schedule": settings.get("schedule", {}),
+            "racing": settings.get("racing", {"enabled": False, "preview_only": True}),
         }, indent=2))
         return 0
     if args.command == "detect":
@@ -673,6 +679,20 @@ def main() -> int:
             for path in sorted(args.log_dir.glob("*")):
                 print(f"{path.name}\t{path.stat().st_size} bytes")
         return 0
+
+    if args.command == "racing":
+        racing_settings = settings.get("racing", {})
+        if not isinstance(racing_settings, dict):
+            print("Invalid Racing Mode configuration; expected an object.", file=sys.stderr)
+            return 2
+        if not bool(racing_settings.get("enabled", False)):
+            print("Racing Mode is disabled. Set racing.enabled=true in manager.json to start it.")
+            return 0
+        if not tasks:
+            print("No configured client tasks. Run 'autoremove-manager configure' first.")
+            return 0
+        from racing import run_monitor
+        return run_monitor(tasks, racing_settings, args.state_dir, args.log_dir)
 
     if args.command == "scheduled" and not bool(settings.get("schedule", {}).get("enabled", False)):
         print("Scheduled runs are disabled in manager.json.")
