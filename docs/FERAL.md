@@ -83,3 +83,14 @@ log file rotates when it reaches 5 MiB and keeps one previous segment (`.1`).
 The active log and its single backup are retained; older rotated content is
 replaced on the next rollover. Rotation is handled by the manager's Python
 logging handler and does not require cron changes or client restarts.
+
+
+## Optional Racing Mode
+
+Racing Mode is not started by the hourly cron entry. It is a separate long-running process and remains disabled after installation. After both qBittorrent and Deluge API endpoints have been configured and verified, enable the nested `racing` settings in `~/.config/auto-remove-manager/manager.json` and start it in a persistent session:
+
+```bash
+~/.local/bin/autoremove-manager racing
+```
+
+Each client has its own worker and speed timer. A client must sustain at least 100 MB/s download speed for five seconds; then its own seeding torrents qualify at ratio >= 1.0 and live upload <= 10 MB/s. Seeding time is ignored. Preview-only is the default. Permanent torrent and payload deletion requires all three Racing Mode switches (`preview_only=false`, `allow_removal=true`, `allow_data_deletion=true`) to be deliberately enabled. API failures fail closed for that client.
