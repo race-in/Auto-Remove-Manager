@@ -80,16 +80,30 @@ class ModeTracker:
         return None
 
 
+def _normal_removal_allowed(task: dict[str, Any], hybrid: dict[str, Any],
+                           settings: dict[str, Any]) -> bool:
+    """Require every global and Hybrid safeguard before Normal removal."""
+    global_safe = (bool(settings.get("allow_removal", False))
+                   and not bool(settings.get("preview_only", True)))
+    hybrid_safe = (bool(hybrid.get("allow_removal", False))
+                   and not bool(hybrid.get("preview_only", True)))
+    if bool(task.get("delete_data", False)):
+        data_safe = (bool(settings.get("allow_data_deletion", False))
+                     and bool(hybrid.get("allow_data_deletion", False)))
+    else:
+        data_safe = True
+    return global_safe and hybrid_safe and data_safe
+
+
 def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
                     hybrid: dict[str, Any], settings: dict[str, Any],
                     logger) -> None:
     """Invoke the unchanged upstream YAML strategy for this task only."""
-    global_safe = bool(settings.get("allow_removal", False)) and not bool(settings.get("preview_only", True))
-    hybrid_safe = not bool(hybrid.get("preview_only", True))
-    data_safe = (not bool(task.get("delete_data", False))
-                 or bool(settings.get("allow_data_deletion", False)))
-    removal = global_safe and hybrid_safe and data_safe
-    if bool(task.get("delete_data", False)) and not bool(settings.get("allow_data_deletion", False)):
+    removal = _normal_removal_allowed(task, hybrid, settings)
+    if bool(task.get("delete_data", False)) and not (
+            bool(settings.get("allow_data_deletion", False))
+            and bool(hybrid.get("allow_data_deletion", False))
+    ):
         logger.warning("%s: payload deletion not authorized; Normal cleanup is preview-only.", name)
     lock = manager.acquire_lock(args.state_dir)
     if lock is None:
