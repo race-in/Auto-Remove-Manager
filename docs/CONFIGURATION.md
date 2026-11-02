@@ -67,3 +67,38 @@ changed. Deleting downloaded payloads additionally requires
 `allow_data_deletion: true` and a task with `delete_data: true`. Do not
 enable payload deletion unless you have a verified backup and understand the
 tracker's retention requirements.
+
+
+## Racing Mode
+
+Racing Mode is independent of the upstream strategy scheduler. It supports configured qBittorrent and Deluge tasks only. It is a foreground, long-running monitor; it is **not** automatically scheduled or started by installation. Run `autoremove-manager racing` in a persistent terminal/session after reviewing the settings.
+
+The installer initializes this block safely in `manager.json`:
+
+```json
+{
+  "racing": {
+    "enabled": false,
+    "preview_only": true,
+    "allow_removal": false,
+    "allow_data_deletion": false,
+    "download_threshold_mb": 100.0,
+    "upload_max_mb": 10.0,
+    "ratio_min": 1.0,
+    "sustain_seconds": 5.0,
+    "poll_interval_seconds": 1.0
+  }
+}
+```
+
+Rules are evaluated separately for each client task:
+
+- That client's aggregate download speed must stay at or above 100 MB/s for five continuous seconds.
+- After its own trigger, all of that client's torrents in a seeding state are checked.
+- A torrent qualifies when ratio is at least 1.0 and its current upload speed is at most 10 MB/s.
+- Seeding time is deliberately not checked.
+- Qualified torrents are removed with downloaded data when, and only when, `preview_only=false`, `allow_removal=true`, and `allow_data_deletion=true` are all set inside the `racing` object.
+
+If any API request or authentication check fails, that client's speed streak is reset and no deletion is attempted for that client. The other client's monitor runs in its own worker. A speed dip below the threshold resets the five-second timer and rearms that client's trigger. The monitor shares the manager's run lock before deleting so it cannot overlap an ordinary manager cleanup.
+
+**Warning:** Enabling all three switches permits permanent removal of torrent entries and their downloaded files. First leave Racing Mode in preview-only mode, inspect `racing.log`, verify both APIs and the matching list, and make sure the download directory contains no data you need.
