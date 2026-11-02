@@ -241,6 +241,43 @@ class QbittorrentRemovalTests(unittest.TestCase):
         self.assertEqual(session.get.call_count, 2)
         self.assertEqual(now[0], racing.QB_DELETE_VERIFY_INTERVAL)
 
+    def test_accepted_delete_finishes_verification_after_shutdown(self):
+        from threading import Event
+        from unittest.mock import Mock, patch
+
+        stop = Event()
+        accepted = Mock()
+        accepted.raise_for_status.return_value = None
+        still_present = Mock()
+        still_present.raise_for_status.return_value = None
+        still_present.json.return_value = [{"hash": "abc123"}]
+        gone = Mock()
+        gone.raise_for_status.return_value = None
+        gone.json.return_value = []
+
+        session = Mock()
+        session.post.return_value = accepted
+
+        def verify_side_effect(*args, **kwargs):
+            if session.get.call_count == 1:
+                stop.set()
+                return still_present
+            return gone
+
+        session.get.side_effect = verify_side_effect
+        api = self._api(session)
+        now, fake_sleep = self._fake_clock()
+
+        with patch.object(racing.time, "monotonic",
+                          side_effect=lambda: now[0]), \\
+             patch.object(racing.time, "sleep", side_effect=fake_sleep):
+            succeeded, failed = api.remove_with_data(["abc123"], stop_event=stop)
+
+        self.assertEqual(succeeded, ["abc123"])
+        self.assertEqual(failed, [])
+        self.assertEqual(session.post.call_count, 1)
+        self.assertEqual(session.get.call_count, 2)
+
     def test_delete_http_error_is_not_reported_as_success(self):
         from unittest.mock import Mock
 
