@@ -193,8 +193,15 @@ def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
         if stop_event is not None and stop_event.is_set():
             logger.info("%s: Racing removal cancelled before final candidate check.", name)
             return
+        preview_hashes = {
+            str(item["hash"]).lower() for item in candidates if item.get("hash")
+        }
         fresh = racing.eligible_torrents(api.client, api.torrents(), ratio_min, upload_max)
-        hashes = [str(item["hash"]) for item in fresh if item.get("hash")]
+        # Revalidation may revoke a preview candidate, never add a new one.
+        hashes = list(dict.fromkeys(
+            str(item["hash"]) for item in fresh
+            if item.get("hash") and str(item["hash"]).lower() in preview_hashes
+        ))
         if not hashes:
             logger.info("%s: candidates no longer qualify; nothing removed.", name)
             return
@@ -209,7 +216,8 @@ def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
 
 
 def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
-                args: Namespace, settings: dict[str, Any]) -> int:
+                args: Namespace, settings: dict[str, Any],
+                stop_event=None) -> int:
     logger = racing.make_logger(args.log_dir)
     try:
         threshold = float(config.get("download_threshold_mb", 100.0)) * MB
@@ -232,7 +240,7 @@ def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
         logger.error("Hybrid requires at least one configured qBittorrent or Deluge task.")
         return 2
 
-    stop = threading.Event()
+    stop = stop_event if stop_event is not None else threading.Event()
 
     def close_api_safely(name, api):
         if api is not None:
