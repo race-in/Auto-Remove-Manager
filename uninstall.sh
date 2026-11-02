@@ -50,6 +50,7 @@ if [[ "$MODE" == root ]]; then
   BASE="/opt/auto-remove-manager"
   CONFIG_DIR="/etc/auto-remove-manager"
   STATE_DIR="/var/lib/auto-remove-manager"
+  LOG_DIR="/var/log/auto-remove-manager"
   BIN="/usr/local/bin/autoremove-manager"
   UNIT_DIR="/etc/systemd/system"
   CRON_USER=""
@@ -68,6 +69,7 @@ else
   BASE="$HOME/.local/share/auto-remove-manager"
   CONFIG_DIR="$HOME/.config/auto-remove-manager"
   STATE_DIR="$HOME/.local/state/auto-remove-manager"
+  LOG_DIR="$STATE_DIR/logs"
   BIN="$HOME/.local/bin/autoremove-manager"
   UNIT_DIR="$HOME/.config/systemd/user"
   CRON_USER=""
@@ -77,7 +79,8 @@ cat <<EOF
 This will remove Auto-Remove-Manager-owned items for mode: $MODE
   Installation: $BASE
   Configuration and credentials: $CONFIG_DIR
-  State and logs: $STATE_DIR
+  State: $STATE_DIR
+  Logs: $LOG_DIR
   Command wrapper: $BIN
   Service/timer: auto-remove-manager.service / auto-remove-manager.timer
 
@@ -97,7 +100,7 @@ if [[ -f "$service_path" ]] && grep -Fq "$MARKER" "$service_path"; then service_
 if [[ -f "$timer_path" ]] && grep -Fq "$MARKER" "$timer_path"; then timer_owned=1; fi
 
 owned_install=0
-for owned_dir in "$BASE" "$CONFIG_DIR" "$STATE_DIR"; do
+for owned_dir in "$BASE" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"; do
   if [[ -d "$owned_dir" && -f "$owned_dir/.arm-owned" ]] &&
      [[ "$(cat "$owned_dir/.arm-owned")" == "$MARKER" ]]; then
     owned_install=1
@@ -159,6 +162,7 @@ remove_owned_dir() {
   fi
 }
 remove_owned_dir "$CONFIG_DIR"
+remove_owned_dir "$LOG_DIR"
 remove_owned_dir "$STATE_DIR"
 remove_owned_dir "$BASE"
 
