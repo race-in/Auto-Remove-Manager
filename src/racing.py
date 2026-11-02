@@ -36,6 +36,8 @@ def eligible_torrents(client: str, torrents: list[dict[str, Any]],
                       upload_max_bytes: float = DEFAULT_UPLOAD_MAX_MB * MB
                       ) -> list[dict[str, Any]]:
     """Return only verified seeding torrents meeting ratio and live-upload limits."""
+    if client not in ("qbittorrent", "deluge"):
+        raise ValueError("Racing Mode supports only qBittorrent and Deluge.")
     selected = []
     for torrent in torrents:
         state = str(torrent.get("state", "")).strip().lower()
