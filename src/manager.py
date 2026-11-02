@@ -481,6 +481,16 @@ def configure_clients(mode: str, upstream_config: pathlib.Path, log_dir: pathlib
     return 0
 
 
+def explicitly_enabled(value: Any) -> bool:
+    """Only a JSON boolean true enables a safety-sensitive feature."""
+    return value is True
+
+
+def explicitly_disabled(value: Any) -> bool:
+    """Only a JSON boolean false disables a fail-closed preview safeguard."""
+    return value is False
+
+
 def load_json(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         return {
@@ -634,9 +644,9 @@ def main() -> int:
     if args.command == "status":
         print(json.dumps({
             "mode": args.mode,
-            "preview_only": bool(settings.get("preview_only", True)),
-            "allow_removal": bool(settings.get("allow_removal", False)),
-            "allow_data_deletion": bool(settings.get("allow_data_deletion", False)),
+            "preview_only": not explicitly_disabled(settings.get("preview_only", True)),
+            "allow_removal": explicitly_enabled(settings.get("allow_removal", False)),
+            "allow_data_deletion": explicitly_enabled(settings.get("allow_data_deletion", False)),
             "configured_tasks": list(tasks.keys()),
             "schedule": settings.get("schedule", {}),
             "racing": settings.get("racing", {"enabled": False, "preview_only": True}),
@@ -685,7 +695,7 @@ def main() -> int:
         if not isinstance(racing_settings, dict):
             print("Invalid Racing Mode configuration; expected an object.", file=sys.stderr)
             return 2
-        if not bool(racing_settings.get("enabled", False)):
+        if not explicitly_enabled(racing_settings.get("enabled", False)):
             print("Racing Mode is disabled. Set racing.enabled=true in manager.json to start it.")
             return 0
         if not tasks:
@@ -694,7 +704,7 @@ def main() -> int:
         from racing import run_monitor
         return run_monitor(tasks, racing_settings, args.state_dir, args.log_dir)
 
-    if args.command == "scheduled" and not bool(settings.get("schedule", {}).get("enabled", False)):
+    if args.command == "scheduled" and not explicitly_enabled(settings.get("schedule", {}).get("enabled", False)):
         print("Scheduled runs are disabled in manager.json.")
         return 0
     if not tasks:
@@ -703,18 +713,18 @@ def main() -> int:
     if args.command == "run" and not args.confirm_removal:
         print("Refusing removal: pass --confirm-removal after enabling allow_removal in manager.json.", file=sys.stderr)
         return 3
-    allow_removal = bool(settings.get("allow_removal", False))
-    preview_only = bool(settings.get("preview_only", True))
+    allow_removal = explicitly_enabled(settings.get("allow_removal", False))
+    preview_only = not explicitly_disabled(settings.get("preview_only", True))
     removal_enabled = allow_removal and not preview_only
     if args.command == "run" and not removal_enabled:
         print("Refusing removal: set allow_removal=true and preview_only=false in manager.json first.", file=sys.stderr)
         return 3
 
     removal_mode = args.command == "run" or (args.command == "scheduled" and removal_enabled)
-    allow_data_deletion = bool(settings.get("allow_data_deletion", False))
+    allow_data_deletion = explicitly_enabled(settings.get("allow_data_deletion", False))
     if removal_mode and not allow_data_deletion:
         deleting_tasks = [name for name, task in tasks.items()
-                          if isinstance(task, dict) and bool(task.get("delete_data", False))]
+                          if isinstance(task, dict) and explicitly_enabled(task.get("delete_data", False))]
         if deleting_tasks:
             print("Refusing data deletion: tasks enable delete_data but allow_data_deletion is false: "
                   + ", ".join(deleting_tasks), file=sys.stderr)
