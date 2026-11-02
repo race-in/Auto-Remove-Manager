@@ -1,9 +1,16 @@
 import pathlib
 import sys
+import tempfile
 import unittest
+from argparse import Namespace
+from unittest.mock import Mock, patch
+
+import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from hybrid import ModeTracker, _normal_removal_allowed
+import manager
+import racing
+from hybrid import ModeTracker, _normal_cleanup, _normal_removal_allowed, _racing_cleanup
 
 
 class ModeTrackerTests(unittest.TestCase):
@@ -109,6 +116,97 @@ class NormalRemovalSafetyTests(unittest.TestCase):
         hybrid = dict(self.safe_hybrid, allow_data_deletion=False)
         settings = dict(self.safe_global, allow_data_deletion=False)
         self.assertTrue(_normal_removal_allowed(task, hybrid, settings))
+
+
+
+class HybridCleanupSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.state_dir = pathlib.Path(self.tempdir.name)
+        self.logger = Mock()
+
+    def test_racing_preview_never_calls_payload_removal(self):
+        torrent = {
+            "hash": "abc123",
+            "name": "eligible seed",
+            "state": "uploading",
+            "ratio": 1.5,
+            "upspeed": 100,
+        }
+        api = Mock()
+        api.client = "qbittorrent"
+        api.torrents.return_value = [torrent]
+        config = {
+            "preview_only": True,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+            "ratio_min": 1.0,
+            "upload_max_mb": 10.0,
+        }
+        settings = {
+            "preview_only": False,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+        }
+
+        _racing_cleanup("qb", api, config, settings, self.state_dir, self.logger)
+
+        api.remove_with_data.assert_not_called()
+        api.torrents.assert_called_once()
+
+    def test_normal_cleanup_preserves_original_strategy_and_delete_data(self):
+        task = {
+            "client": "qbittorrent",
+            "delete_data": True,
+            "strategies": {
+                "remove": "(ratio > 1 or ratio = 1) and (seeding_time > 300 or seeding_time = 300) and upload_speed < 1024"
+            },
+        }
+        args = Namespace(state_dir=self.state_dir, log_dir=self.state_dir / "logs")
+        hybrid = {
+            "preview_only": True,
+            "allow_removal": False,
+            "allow_data_deletion": False,
+        }
+        settings = {
+            "preview_only": True,
+            "allow_removal": False,
+            "allow_data_deletion": False,
+        }
+        observed = {}
+
+        def inspect_upstream(child_args, preview):
+            with pathlib.Path(child_args.upstream_config).open(encoding="utf-8") as stream:
+                observed["task"] = yaml.safe_load(stream)
+            observed["preview"] = preview
+            return 0
+
+        with patch.object(manager, "invoke_upstream", side_effect=inspect_upstream):
+            _normal_cleanup("qb", task, args, hybrid, settings, self.logger)
+
+        self.assertEqual(observed["task"], {"qb": task})
+        self.assertTrue(observed["task"]["qb"]["delete_data"])
+        self.assertEqual(
+            observed["task"]["qb"]["strategies"]["remove"],
+            task["strategies"]["remove"],
+        )
+        self.assertTrue(observed["preview"])
+
+    def test_manager_and_racing_share_the_same_exclusive_lock(self):
+        manager_lock = manager.acquire_lock(self.state_dir)
+        self.assertIsNotNone(manager_lock)
+        try:
+            self.assertIsNone(racing._try_run_lock(self.state_dir))
+        finally:
+            manager_lock.close()
+
+        racing_lock = racing._try_run_lock(self.state_dir)
+        self.assertIsNotNone(racing_lock)
+        try:
+            self.assertIsNone(manager.acquire_lock(self.state_dir))
+        finally:
+            racing_lock.close()
 
 
 if __name__ == "__main__":
