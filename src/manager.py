@@ -700,6 +700,13 @@ with patch.object(qBittorrent, "login", compatible_login):
             except subprocess.TimeoutExpired:
                 continue
 
+    except KeyboardInterrupt:
+        # start_new_session isolates the child from terminal SIGINT. Always
+        # terminate and reap its whole process group before releasing our lock.
+        if process is not None:
+            print("Interrupt received; terminating upstream process group.")
+            _terminate_child_process(process)
+        return 130
     except OSError as exc:
         print("Unable to launch or stop AutoRemove Torrents: {}".format(exc),
               file=sys.stderr)
