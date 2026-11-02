@@ -261,11 +261,15 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                 state_dir: pathlib.Path, log_dir: pathlib.Path) -> int:
     """Monitor every configured client task in its own independent worker."""
     logger = make_logger(log_dir)
-    download_mb = float(config.get("download_threshold_mb", DEFAULT_DOWNLOAD_THRESHOLD_MB))
-    upload_mb = float(config.get("upload_max_mb", DEFAULT_UPLOAD_MAX_MB))
-    sustain = float(config.get("sustain_seconds", DEFAULT_SUSTAIN_SECONDS))
-    poll = float(config.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL))
-    ratio_min = float(config.get("ratio_min", 1.0))
+    try:
+        download_mb = float(config.get("download_threshold_mb", DEFAULT_DOWNLOAD_THRESHOLD_MB))
+        upload_mb = float(config.get("upload_max_mb", DEFAULT_UPLOAD_MAX_MB))
+        sustain = float(config.get("sustain_seconds", DEFAULT_SUSTAIN_SECONDS))
+        poll = float(config.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL))
+        ratio_min = float(config.get("ratio_min", 1.0))
+    except (TypeError, ValueError, OverflowError):
+        logger.error("Racing Mode thresholds must be numeric; monitor was not started.")
+        return 2
     if (not math.isfinite(download_mb) or download_mb <= 0
             or not math.isfinite(upload_mb) or upload_mb < 0
             or not math.isfinite(sustain) or sustain <= 0
@@ -343,17 +347,29 @@ def run_monitor(tasks: dict[str, Any], config: dict[str, Any],
                                     gate.triggered = False
                                 else:
                                     try:
-                                        hashes = [str(item["hash"]) for item in candidates]
-                                        succeeded, failed = client.remove_with_data(hashes)
-                                        logger.warning(
-                                            "%s: removed %d torrent(s) with payload data; %d failure(s).",
-                                            name, len(succeeded), len(failed),
+                                        # Re-read immediately before deletion so a stale
+                                        # preview cannot authorize removal after state/ratio changes.
+                                        latest = client.torrents()
+                                        latest_candidates = eligible_torrents(
+                                            client.client, latest, ratio_min, upload_mb * MB
                                         )
-                                        for failed_hash in failed:
-                                            logger.error("%s: removal failed for hash=%s", name, failed_hash)
-                                        if failed:
-                                            gate.started_at = None
-                                            gate.triggered = False
+                                        hashes = [str(item["hash"]) for item in latest_candidates]
+                                        if not hashes:
+                                            logger.info(
+                                                "%s: candidates no longer match on final verification; nothing removed.",
+                                                name,
+                                            )
+                                        else:
+                                            succeeded, failed = client.remove_with_data(hashes)
+                                            logger.warning(
+                                                "%s: removed %d torrent(s) with payload data; %d failure(s).",
+                                                name, len(succeeded), len(failed),
+                                            )
+                                            for failed_hash in failed:
+                                                logger.error("%s: removal failed for hash=%s", name, failed_hash)
+                                            if failed:
+                                                gate.started_at = None
+                                                gate.triggered = False
                                     finally:
                                         lock.close()
                 except Exception as exc:
