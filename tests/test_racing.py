@@ -269,9 +269,11 @@ class QbittorrentRemovalTests(unittest.TestCase):
         now, fake_sleep = self._fake_clock()
 
         with patch.object(racing.time, "monotonic",
-                          side_effect=lambda: now[0]), \\
-             patch.object(racing.time, "sleep", side_effect=fake_sleep):
-            succeeded, failed = api.remove_with_data(["abc123"], stop_event=stop)
+                          side_effect=lambda: now[0]):
+            with patch.object(racing.time, "sleep", side_effect=fake_sleep):
+                succeeded, failed = api.remove_with_data(
+                    ["abc123"], stop_event=stop
+                )
 
         self.assertEqual(succeeded, ["abc123"])
         self.assertEqual(failed, [])
