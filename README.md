@@ -47,6 +47,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/race-in/Auto-Remove-Manager/
 - Protects against concurrent runs with a process lock.
 - Rotates upstream daily log files at 5 MiB and retains one backup.
 - Uses explicit deletion and payload-deletion safeguards.
+- Includes an optional Racing Mode monitor for independent qBittorrent and Deluge speed triggers, with per-client workers and fail-closed API handling.
 - One-click uninstall removes manager-owned files, configuration, credentials, logs, virtual environment, service/timer and marked cron entry.
 
 ## First-time setup
@@ -72,6 +73,7 @@ autoremove-manager detect
 autoremove-manager configure
 autoremove-manager test
 autoremove-manager preview
+autoremove-manager racing  # optional long-running monitor; disabled by default
 autoremove-manager logs
 autoremove-manager uninstall
 ```
@@ -92,6 +94,12 @@ autoremove-manager run --confirm-removal
 ```
 
 Scheduled runs remain preview-only until the same settings are deliberately changed. Removing downloaded payload data has an additional separate opt-in: `allow_data_deletion: true`, plus `delete_data: true` in the relevant task. Read [Configuration](docs/CONFIGURATION.md) before enabling either option.
+
+## Racing Mode (optional)
+
+Racing Mode is a separate, long-running monitor and is disabled by default. It samples each configured qBittorrent or Deluge client independently. A client's own download speed must remain at or above 100 MB/s for five seconds before that same client is evaluated. All of that client's seeding torrents with ratio >= 1.0 and live upload speed <= 10 MB/s are eligible; seeding time is ignored. Eligible torrents are removed with their payload data only after all three Racing Mode safety switches are deliberately enabled. API errors fail closed for the affected client and do not stop the other client's worker.
+
+Run `autoremove-manager racing` in a persistent terminal/session after enabling `racing.enabled`. The initial settings are preview-only and all deletion switches are off. See [Configuration](docs/CONFIGURATION.md) before enabling removal. The monitor is not automatically added to cron or systemd.
 
 ## Uninstallation
 
