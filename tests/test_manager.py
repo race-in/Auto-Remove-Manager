@@ -219,6 +219,26 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result, 130)
         popen.assert_not_called()
 
+    def test_keyboard_interrupt_terminates_upstream_process_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = manager.argparse.Namespace(
+                log_dir=pathlib.Path(tmp),
+                upstream_config=pathlib.Path(tmp) / "config.yml",
+            )
+            process = mock.Mock()
+            process.wait.side_effect = KeyboardInterrupt
+            with mock.patch.object(
+                manager, "find_upstream_executable", return_value="/bin/true"
+            ), mock.patch.object(
+                manager.subprocess, "Popen", return_value=process
+            ), mock.patch.object(
+                manager, "_terminate_child_process"
+            ) as terminate:
+                result = manager.invoke_upstream(args, False)
+
+        self.assertEqual(result, 130)
+        terminate.assert_called_once_with(process)
+
     def test_terminate_child_process_signals_process_group(self):
         process = mock.Mock()
         process.pid = 43210
