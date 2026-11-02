@@ -83,13 +83,16 @@ class ModeTracker:
 def _normal_removal_allowed(task: dict[str, Any], hybrid: dict[str, Any],
                            settings: dict[str, Any]) -> bool:
     """Require every global and Hybrid safeguard before Normal removal."""
-    global_safe = (bool(settings.get("allow_removal", False))
-                   and not bool(settings.get("preview_only", True)))
-    hybrid_safe = (bool(hybrid.get("allow_removal", False))
-                   and not bool(hybrid.get("preview_only", True)))
-    if bool(task.get("delete_data", False)):
-        data_safe = (bool(settings.get("allow_data_deletion", False))
-                     and bool(hybrid.get("allow_data_deletion", False)))
+    global_safe = (settings.get("allow_removal") is True
+                   and settings.get("preview_only", True) is False)
+    hybrid_safe = (hybrid.get("allow_removal") is True
+                   and hybrid.get("preview_only", True) is False)
+    delete_data = task.get("delete_data", False)
+    if type(delete_data) is not bool:
+        return False
+    if delete_data:
+        data_safe = (settings.get("allow_data_deletion") is True
+                     and hybrid.get("allow_data_deletion") is True)
     else:
         data_safe = True
     return global_safe and hybrid_safe and data_safe
@@ -97,12 +100,15 @@ def _normal_removal_allowed(task: dict[str, Any], hybrid: dict[str, Any],
 
 def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
                     hybrid: dict[str, Any], settings: dict[str, Any],
-                    logger) -> None:
+                    logger, stop_event=None) -> None:
     """Invoke the unchanged upstream YAML strategy for this task only."""
+    if stop_event is not None and stop_event.is_set():
+        logger.info("%s: Normal cleanup cancelled before lock acquisition.", name)
+        return
     removal = _normal_removal_allowed(task, hybrid, settings)
-    if bool(task.get("delete_data", False)) and not (
-            bool(settings.get("allow_data_deletion", False))
-            and bool(hybrid.get("allow_data_deletion", False))
+    if task.get("delete_data", False) is True and not (
+            settings.get("allow_data_deletion") is True
+            and hybrid.get("allow_data_deletion") is True
     ):
         logger.warning("%s: payload deletion not authorized; Normal cleanup is preview-only.", name)
     lock = manager.acquire_lock(args.state_dir)
@@ -111,6 +117,9 @@ def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
         return
     temporary = None
     try:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("%s: Normal cleanup cancelled before starting upstream.", name)
+            return
         fd, temp_name = tempfile.mkstemp(prefix=".hybrid-task-", suffix=".yml",
                                          dir=str(args.state_dir), text=True)
         temporary = pathlib.Path(temp_name)
@@ -121,7 +130,12 @@ def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
             os.fsync(stream.fileno())
         child_args = Namespace(upstream_config=temporary, log_dir=args.log_dir)
         logger.info("%s: Normal strategy run (%s).", name, "removal" if removal else "preview")
-        result = manager.invoke_upstream(child_args, preview=not removal)
+        result = manager.invoke_upstream(
+            child_args, preview=not removal, stop_event=stop_event
+        )
+        if result == 130:
+            logger.info("%s: Normal cleanup stopped on request.", name)
+            return
         if result:
             logger.error("%s: upstream Normal cleanup exited with status %s.", name, result)
     except Exception as exc:
@@ -132,17 +146,27 @@ def _normal_cleanup(name: str, task: dict[str, Any], args: Namespace,
                 temporary.unlink()
             except OSError:
                 logger.error("%s: temporary task configuration cleanup failed.", name)
-        lock.close()
+        try:
+            lock.close()
+        except Exception:
+            logger.exception("%s: failed to release Normal cleanup lock.", name)
 
 
 def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
-                    settings: dict[str, Any], state_dir: pathlib.Path, logger) -> None:
+                    settings: dict[str, Any], state_dir: pathlib.Path, logger,
+                    stop_event=None) -> None:
     """Evaluate Racing candidates under the same lock used by Normal cleanup."""
+    if stop_event is not None and stop_event.is_set():
+        logger.info("%s: Racing cleanup cancelled before lock acquisition.", name)
+        return
     lock = manager.acquire_lock(state_dir)
     if lock is None:
         logger.info("%s: shared run lock busy; Racing cycle skipped.", name)
         return
     try:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("%s: Racing cleanup cancelled after lock acquisition.", name)
+            return
         ratio_min = float(config.get("ratio_min", 1.0))
         upload_max = float(config.get("upload_max_mb", 10.0)) * MB
         candidates = racing.eligible_torrents(api.client, api.torrents(), ratio_min, upload_max)
@@ -155,23 +179,29 @@ def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
                         name, str(item.get("name", ""))[:120],
                         float(item["ratio"]), float(upload) / MB)
         deletion = (
-            not bool(settings.get("preview_only", True))
-            and bool(settings.get("allow_removal", False))
-            and bool(settings.get("allow_data_deletion", False))
-            and not bool(config.get("preview_only", True))
-            and bool(config.get("allow_removal", False))
-            and bool(config.get("allow_data_deletion", False))
+            settings.get("preview_only", True) is False
+            and settings.get("allow_removal") is True
+            and settings.get("allow_data_deletion") is True
+            and config.get("preview_only", True) is False
+            and config.get("allow_removal") is True
+            and config.get("allow_data_deletion") is True
         )
         if not deletion:
             logger.warning("%s: Racing preview only; no torrent data was changed.", name)
             return
         # Re-read candidate state immediately before any removal.
+        if stop_event is not None and stop_event.is_set():
+            logger.info("%s: Racing removal cancelled before final candidate check.", name)
+            return
         fresh = racing.eligible_torrents(api.client, api.torrents(), ratio_min, upload_max)
         hashes = [str(item["hash"]) for item in fresh if item.get("hash")]
         if not hashes:
             logger.info("%s: candidates no longer qualify; nothing removed.", name)
             return
-        removed, failed = api.remove_with_data(hashes)
+        if stop_event is not None and stop_event.is_set():
+            logger.info("%s: Racing removal cancelled before API deletion.", name)
+            return
+        removed, failed = api.remove_with_data(hashes, stop_event=stop_event)
         logger.warning("%s: Racing removal result: %d removed, %d failed.",
                        name, len(removed), len(failed))
     finally:
@@ -179,7 +209,7 @@ def _racing_cleanup(name: str, api: racing.ClientAPI, config: dict[str, Any],
 
 
 def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
-               args: Namespace, settings: dict[str, Any]) -> int:
+                args: Namespace, settings: dict[str, Any]) -> int:
     logger = racing.make_logger(args.log_dir)
     try:
         threshold = float(config.get("download_threshold_mb", 100.0)) * MB
@@ -201,65 +231,116 @@ def run_hybrid(tasks: dict[str, Any], config: dict[str, Any],
     if not specs:
         logger.error("Hybrid requires at least one configured qBittorrent or Deluge task.")
         return 2
+
     stop = threading.Event()
+
+    def close_api_safely(name, api):
+        if api is not None:
+            try:
+                api.close()
+            except Exception as exc:
+                logger.error("%s: API close failed (%s).", name, type(exc).__name__)
 
     def worker(name: str, task: dict[str, Any]) -> None:
         tracker = ModeTracker(threshold, sustain)
         api = None
         next_cleanup = 0.0
         logger.info("%s (%s): Hybrid worker started in Normal mode; preview_only=%s.",
-                    name, task.get("client"), bool(config.get("preview_only", True)))
-        while not stop.is_set():
-            try:
-                if api is None:
-                    api = racing.ClientAPI(name, task)
-                    api.connect()
-                    logger.info("%s: API authenticated; monitoring enabled.", name)
-                speed = api.download_speed()
-                changed = tracker.sample(speed, time.monotonic())
-                if changed:
-                    logger.warning("%s: switched to %s mode after sustained speed threshold.",
-                                   name, changed.upper())
-                    next_cleanup = 0.0
-                now = time.monotonic()
-                if tracker.mode is not None and now >= next_cleanup:
-                    if tracker.mode == "normal":
-                        _normal_cleanup(name, task, args, config, settings, logger)
-                    else:
-                        _racing_cleanup(name, api, config, settings, args.state_dir, logger)
-                    next_cleanup = time.monotonic() + interval
-            except Exception as exc:
-                logger.error("%s: API/worker error (%s); cleanup suspended and streak reset.",
-                             name, type(exc).__name__)
-                tracker = ModeTracker(threshold, sustain, initial_mode=None)
-                # Never run Normal immediately after reconnect: wait for a
-                # fresh, continuous five-second classification first.
-                next_cleanup = float("inf")
-                if api is not None:
-                    api.close()
+                    name, task.get("client"), config.get("preview_only", True) is True)
+        try:
+            while not stop.is_set():
+                try:
+                    if api is None:
+                        if stop.is_set():
+                            break
+                        api = racing.ClientAPI(name, task)
+                        api.connect()
+                        logger.info("%s: API authenticated; monitoring enabled.", name)
+
+                    speed = api.download_speed()
+                    changed = tracker.sample(speed, time.monotonic())
+
+                    if changed:
+                        logger.warning("%s: switched to %s mode after sustained speed threshold.",
+                                       name, changed.upper())
+                        next_cleanup = 0.0
+
+                    now = time.monotonic()
+                    if stop.is_set():
+                        break
+
+                    if tracker.mode is not None and now >= next_cleanup:
+                        if stop.is_set():
+                            break
+                        if tracker.mode == "normal":
+                            _normal_cleanup(
+                                name, task, args, config, settings, logger,
+                                stop_event=stop
+                            )
+                        else:
+                            _racing_cleanup(
+                                name, api, config, settings, args.state_dir, logger,
+                                stop_event=stop
+                            )
+                        next_cleanup = time.monotonic() + interval
+
+                except Exception as exc:
+                    logger.error(
+                        "%s: API/worker error (%s); cleanup suspended and streak reset.",
+                        name, type(exc).__name__
+                    )
+                    tracker = ModeTracker(threshold, sustain, initial_mode=None)
+                    next_cleanup = float("inf")
+                    close_api_safely(name, api)
                     api = None
-                stop.wait(max(poll, 2.0))
-                continue
-            stop.wait(poll)
-        if api is not None:
-            api.close()
+                    if stop.wait(max(poll, 2.0)):
+                        break
+                    continue
+
+                if stop.wait(poll):
+                    break
+        finally:
+            close_api_safely(name, api)
+            logger.info("%s: Hybrid worker stopped.", name)
 
     workers = [
-        threading.Thread(target=worker, args=(name, task), name="hybrid-" + name, daemon=True)
+        threading.Thread(
+            target=worker,
+            args=(name, task),
+            name="hybrid-" + name,
+            daemon=False,
+        )
         for name, task in specs
     ]
+
+    started = []
     try:
         for thread in workers:
             thread.start()
-        logger.info("Hybrid controller started with %d independent client worker(s).", len(workers))
-        while any(thread.is_alive() for thread in workers):
-            for thread in workers:
+            started.append(thread)
+
+        logger.info("Hybrid controller started with %d independent client worker(s).",
+                    len(workers))
+
+        while any(thread.is_alive() for thread in started):
+            for thread in started:
                 thread.join(timeout=0.5)
+
     except KeyboardInterrupt:
-        logger.info("Stop requested; waiting for workers.")
+        logger.info("Stop requested; signalling all Hybrid workers.")
         stop.set()
-        for thread in workers:
-            thread.join(timeout=10)
+
     finally:
         stop.set()
+        # Do not return while a non-daemon worker still owns an API session
+        # or the shared run lock. Normal child processes observe this event.
+        for thread in started:
+            while thread.is_alive():
+                try:
+                    thread.join(timeout=0.5)
+                except KeyboardInterrupt:
+                    stop.set()
+                    continue
+
+    logger.info("Hybrid controller stopped; all workers have exited.")
     return 0

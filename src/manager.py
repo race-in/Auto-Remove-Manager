@@ -13,9 +13,11 @@ import pathlib
 import pwd
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 import yaml
@@ -481,6 +483,24 @@ def configure_clients(mode: str, upstream_config: pathlib.Path, log_dir: pathlib
     return 0
 
 
+def _validate_boolean_fields(value: dict[str, Any], fields: tuple[str, ...],
+                             context: str) -> None:
+    """Reject non-JSON-boolean values in safety-sensitive configuration."""
+    for field in fields:
+        if field in value and type(value[field]) is not bool:
+            raise ValueError(
+                "{}.{} must be a JSON boolean (true or false).".format(
+                    context, field
+                )
+            )
+
+
+
+def _schedule_enabled(settings: dict[str, Any]) -> bool:
+    """Only an explicit boolean true enables scheduled execution."""
+    schedule = settings.get("schedule", {})
+    return isinstance(schedule, dict) and schedule.get("enabled") is True
+
 def load_json(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         return {
@@ -499,6 +519,27 @@ def load_json(path: pathlib.Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("Manager settings must be a JSON object.")
+
+    _validate_boolean_fields(
+        value,
+        ("preview_only", "allow_removal", "allow_data_deletion"),
+        "manager",
+    )
+
+    for section, fields in (
+        ("schedule", ("enabled",)),
+        ("racing", ("enabled", "preview_only", "allow_removal",
+                    "allow_data_deletion")),
+        ("hybrid", ("enabled", "preview_only", "allow_removal",
+                    "allow_data_deletion")),
+    ):
+        if section in value:
+            if not isinstance(value[section], dict):
+                raise ValueError("manager.{} must be a JSON object.".format(section))
+            _validate_boolean_fields(
+                value[section], fields, "manager." + section
+            )
+
     return value
 
 
@@ -510,6 +551,18 @@ def load_upstream_yaml(path: pathlib.Path) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError("Upstream YAML must contain a mapping of task names.")
+
+    for task_name, task in value.items():
+        if not isinstance(task, dict):
+            raise ValueError(
+                "Upstream task {!r} must be a mapping.".format(task_name)
+            )
+        if "delete_data" in task and type(task["delete_data"]) is not bool:
+            raise ValueError(
+                "Upstream task {!r}: delete_data must be YAML true or false.".format(
+                    task_name
+                )
+            )
     return value
 
 
@@ -530,15 +583,42 @@ def find_upstream_executable() -> str | None:
     return shutil.which("autoremove-torrents")
 
 
-def invoke_upstream(args: argparse.Namespace, preview: bool) -> int:
+def _terminate_child_process(process, grace_seconds: float = 10.0) -> None:
+    """Stop the upstream process group, including any child processes."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+
+    # Kill any surviving descendants even if the group leader already exited.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+    # Always reap the direct child.
+    process.wait()
+
+
+
+def invoke_upstream(args: argparse.Namespace, preview: bool,
+                    stop_event=None) -> int:
     executable = find_upstream_executable()
     if not executable:
         print("autoremove-torrents executable not found in the active environment or PATH.", file=sys.stderr)
         return 127
+
+    if stop_event is not None and stop_event.is_set():
+        print("Hybrid stop requested; upstream process was not started.")
+        return 130
+
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    # Run the upstream console script under this interpreter with the qBittorrent
-    # login compatibility patch active in the child process too. A patch applied
-    # during configure/test cannot affect the separate upstream CLI process.
+
     bootstrap = """
 import logging
 import logging.handlers
@@ -586,22 +666,44 @@ init_bounded_logger(log_dir)
 with patch.object(qBittorrent, "login", compatible_login):
     runpy.run_path(script, run_name="__main__")
 """
-    command = [sys.executable, "-c", bootstrap, executable,
-               "--conf", str(args.upstream_config), "--log", str(args.log_dir)]
+
+    command = [
+        sys.executable, "-c", bootstrap, executable,
+        "--conf", str(args.upstream_config), "--log", str(args.log_dir)
+    ]
     if preview:
         command.append("--view")
-    print("Running upstream AutoRemove Torrents in " + ("PREVIEW" if preview else "REMOVAL") + " mode.")
-    print("Configuration:", args.upstream_config)
-    try:
-        result = subprocess.run(command, check=False, timeout=3600)
-    except subprocess.TimeoutExpired:
-        print("AutoRemove Torrents timed out after one hour.", file=sys.stderr)
-        return 124
-    except OSError as exc:
-        print(f"Unable to launch AutoRemove Torrents: {exc}", file=sys.stderr)
-        return 1
-    return result.returncode
 
+    print("Running upstream AutoRemove Torrents in " +
+          ("PREVIEW" if preview else "REMOVAL") + " mode.")
+    print("Configuration:", args.upstream_config)
+
+    process = None
+    try:
+        process = subprocess.Popen(command, start_new_session=True)
+        deadline = time.monotonic() + 3600.0
+
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                print("Stop requested; terminating upstream AutoRemove Torrents.")
+                _terminate_child_process(process)
+                return 130
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print("AutoRemove Torrents timed out after one hour.", file=sys.stderr)
+                _terminate_child_process(process)
+                return 124
+
+            try:
+                return process.wait(timeout=min(0.25, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+
+    except OSError as exc:
+        print("Unable to launch or stop AutoRemove Torrents: {}".format(exc),
+              file=sys.stderr)
+        return 1
 
 def acquire_lock(state_dir: pathlib.Path):
     import fcntl
@@ -655,9 +757,9 @@ def main() -> int:
     if args.command == "status":
         print(json.dumps({
             "mode": args.mode,
-            "preview_only": bool(settings.get("preview_only", True)),
-            "allow_removal": bool(settings.get("allow_removal", False)),
-            "allow_data_deletion": bool(settings.get("allow_data_deletion", False)),
+            "preview_only": settings.get("preview_only", True) is not False,
+            "allow_removal": settings.get("allow_removal") is True,
+            "allow_data_deletion": settings.get("allow_data_deletion") is True,
             "configured_tasks": list(tasks.keys()),
             "schedule": settings.get("schedule", {}),
             "racing": settings.get("racing", {"enabled": False, "preview_only": True}),
@@ -707,7 +809,7 @@ def main() -> int:
         if not isinstance(hybrid_settings, dict):
             print("Invalid Hybrid Mode configuration; expected an object.", file=sys.stderr)
             return 2
-        if not bool(hybrid_settings.get("enabled", False)):
+        if not hybrid_settings.get("enabled") is True:
             print("Hybrid Mode is disabled. Set hybrid.enabled=true in manager.json to start it.")
             return 0
         if not tasks:
@@ -721,7 +823,7 @@ def main() -> int:
         if not isinstance(racing_settings, dict):
             print("Invalid Racing Mode configuration; expected an object.", file=sys.stderr)
             return 2
-        if not bool(racing_settings.get("enabled", False)):
+        if not racing_settings.get("enabled") is True:
             print("Racing Mode is disabled. Set racing.enabled=true in manager.json to start it.")
             return 0
         if not tasks:
@@ -730,7 +832,7 @@ def main() -> int:
         from racing import run_monitor
         return run_monitor(tasks, racing_settings, args.state_dir, args.log_dir)
 
-    if args.command == "scheduled" and not bool(settings.get("schedule", {}).get("enabled", False)):
+    if args.command == "scheduled" and not _schedule_enabled(settings):
         print("Scheduled runs are disabled in manager.json.")
         return 0
     if not tasks:
@@ -739,18 +841,18 @@ def main() -> int:
     if args.command == "run" and not args.confirm_removal:
         print("Refusing removal: pass --confirm-removal after enabling allow_removal in manager.json.", file=sys.stderr)
         return 3
-    allow_removal = bool(settings.get("allow_removal", False))
-    preview_only = bool(settings.get("preview_only", True))
+    allow_removal = settings.get("allow_removal") is True
+    preview_only = settings.get("preview_only", True) is not False
     removal_enabled = allow_removal and not preview_only
     if args.command == "run" and not removal_enabled:
         print("Refusing removal: set allow_removal=true and preview_only=false in manager.json first.", file=sys.stderr)
         return 3
 
     removal_mode = args.command == "run" or (args.command == "scheduled" and removal_enabled)
-    allow_data_deletion = bool(settings.get("allow_data_deletion", False))
+    allow_data_deletion = settings.get("allow_data_deletion") is True
     if removal_mode and not allow_data_deletion:
         deleting_tasks = [name for name, task in tasks.items()
-                          if isinstance(task, dict) and bool(task.get("delete_data", False))]
+                          if isinstance(task, dict) and task.get("delete_data", False) is True]
         if deleting_tasks:
             print("Refusing data deletion: tasks enable delete_data but allow_data_deletion is false: "
                   + ", ".join(deleting_tasks), file=sys.stderr)

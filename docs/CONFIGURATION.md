@@ -108,4 +108,13 @@ If any API request or authentication check fails, that client's speed streak is 
 
 Hybrid mode uses independent qBittorrent and Deluge workers. Each worker enters Racing after download speed stays at or above 100 MB/s for five seconds, and returns to Normal after speed stays below 100 MB/s for five seconds. Invalid samples reset the transition timer. Normal mode runs that task's unchanged upstream YAML rule. Racing mode selects seeding torrents with ratio >= 1.0 and live upload <= 10 MB/s; seeding time is ignored. Cleanup cadence defaults to 60 seconds and all cleanup operations share the manager lock.
 
-The `hybrid` block is disabled by default. Set `hybrid.enabled=true` and run `autoremove-manager hybrid`. Keep `hybrid.preview_only=true` during validation. Racing deletion requires `hybrid.preview_only=false`, `hybrid.allow_removal=true`, and `hybrid.allow_data_deletion=true`. Normal deletion additionally requires both Hybrid-level switches (`hybrid.allow_removal=true` and `hybrid.preview_only=false`) and the top-level `allow_removal=true` and `preview_only=false` settings. If the task has `delete_data: true`, both top-level and Hybrid `allow_data_deletion=true` are also required. API errors suspend cleanup for the affected client.
+The `hybrid` block is disabled by default. Set `hybrid.enabled=true` and run `autoremove-manager hybrid` in a persistent terminal/session. Keep `hybrid.preview_only=true` during validation.
+
+**Hybrid Racing deletion requires all six safeguards:**
+
+- Top-level `manager.json`: `preview_only=false`, `allow_removal=true`, and `allow_data_deletion=true`.
+- Nested `hybrid` object: `preview_only=false`, `allow_removal=true`, and `allow_data_deletion=true`.
+
+If any one of these six settings is absent or unsafe, Hybrid Racing remains preview-only. The controller re-reads candidates immediately before requesting removal. For qBittorrent, it also checks the fresh torrent list after the delete request and reports only entries no longer listed as confirmed removed; this confirms torrent-entry removal, not independent filesystem erasure.
+
+**Hybrid Normal deletion has separate requirements:** top-level and Hybrid `preview_only=false` and `allow_removal=true` must both be set. If the task has `delete_data: true`, both top-level and Hybrid `allow_data_deletion=true` are additionally required. The original upstream YAML strategy remains the Normal-mode rule. API errors suspend cleanup for the affected client and reset its mode classification.

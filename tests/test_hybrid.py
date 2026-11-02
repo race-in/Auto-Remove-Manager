@@ -155,6 +155,57 @@ class HybridCleanupSafetyTests(unittest.TestCase):
         api.remove_with_data.assert_not_called()
         api.torrents.assert_called_once()
 
+    def test_racing_deletion_requires_all_six_safety_switches(self):
+        torrent = {
+            "hash": "abc123", "name": "eligible seed",
+            "state": "uploading", "ratio": 1.5, "upspeed": 100,
+        }
+        safe = {
+            "preview_only": False, "allow_removal": True,
+            "allow_data_deletion": True, "ratio_min": 1.0,
+            "upload_max_mb": 10.0,
+        }
+        for scope in ("global", "hybrid"):
+            for key, unsafe in (
+                ("preview_only", True),
+                ("allow_removal", False),
+                ("allow_data_deletion", False),
+            ):
+                with self.subTest(scope=scope, key=key):
+                    config, settings = dict(safe), dict(safe)
+                    if scope == "global":
+                        settings[key] = unsafe
+                    else:
+                        config[key] = unsafe
+                    api = Mock()
+                    api.client = "qbittorrent"
+                    api.torrents.return_value = [torrent]
+                    _racing_cleanup(
+                        "qb", api, config, settings, self.state_dir, self.logger
+                    )
+                    api.remove_with_data.assert_not_called()
+                    api.torrents.assert_called_once()
+
+    def test_racing_rechecks_candidates_when_all_six_switches_are_enabled(self):
+        torrent = {
+            "hash": "abc123", "name": "eligible seed",
+            "state": "uploading", "ratio": 1.5, "upspeed": 100,
+        }
+        safe = {
+            "preview_only": False, "allow_removal": True,
+            "allow_data_deletion": True, "ratio_min": 1.0,
+            "upload_max_mb": 10.0,
+        }
+        api = Mock()
+        api.client = "qbittorrent"
+        api.torrents.side_effect = [[torrent], [torrent]]
+        api.remove_with_data.return_value = (["abc123"], [])
+        _racing_cleanup(
+            "qb", api, dict(safe), dict(safe), self.state_dir, self.logger
+        )
+        self.assertEqual(api.torrents.call_count, 2)
+        api.remove_with_data.assert_called_once_with(["abc123"], stop_event=None)
+
     def test_normal_cleanup_preserves_original_strategy_and_delete_data(self):
         task = {
             "client": "qbittorrent",
@@ -176,7 +227,7 @@ class HybridCleanupSafetyTests(unittest.TestCase):
         }
         observed = {}
 
-        def inspect_upstream(child_args, preview):
+        def inspect_upstream(child_args, preview, stop_event=None):
             with pathlib.Path(child_args.upstream_config).open(encoding="utf-8") as stream:
                 observed["task"] = yaml.safe_load(stream)
             observed["preview"] = preview
@@ -208,6 +259,45 @@ class HybridCleanupSafetyTests(unittest.TestCase):
         finally:
             racing_lock.close()
 
+
+
+class HybridStrictSafetyTests(unittest.TestCase):
+    def test_invalid_delete_data_value_fails_closed(self):
+        import hybrid
+
+        settings = {
+            "preview_only": False,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+        }
+        hybrid_config = {
+            "preview_only": False,
+            "allow_removal": True,
+            "allow_data_deletion": True,
+        }
+        for invalid in ("true", "false", 0, 1, None):
+            with self.subTest(delete_data=invalid):
+                self.assertFalse(hybrid._normal_removal_allowed(
+                    {"delete_data": invalid}, hybrid_config, settings
+                ))
+
+    def test_valid_boolean_delete_data_obeys_payload_safeguard(self):
+        import hybrid
+
+        settings = {"preview_only": False, "allow_removal": True,
+                    "allow_data_deletion": True}
+        hybrid_config = {"preview_only": False, "allow_removal": True,
+                         "allow_data_deletion": True}
+        self.assertTrue(hybrid._normal_removal_allowed(
+            {"delete_data": False}, hybrid_config, settings
+        ))
+        self.assertTrue(hybrid._normal_removal_allowed(
+            {"delete_data": True}, hybrid_config, settings
+        ))
+        hybrid_config["allow_data_deletion"] = False
+        self.assertFalse(hybrid._normal_removal_allowed(
+            {"delete_data": True}, hybrid_config, settings
+        ))
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ import pathlib
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -201,6 +202,114 @@ class ManagerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manager.load_upstream_yaml(path)
 
+
+    def test_upstream_is_not_started_after_stop_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = manager.argparse.Namespace(
+                log_dir=pathlib.Path(tmp),
+                upstream_config=pathlib.Path(tmp) / "config.yml",
+            )
+            stop = threading.Event()
+            stop.set()
+            with mock.patch.object(
+                manager, "find_upstream_executable", return_value="/bin/true"
+            ), mock.patch.object(manager.subprocess, "Popen") as popen:
+                result = manager.invoke_upstream(args, True, stop_event=stop)
+
+        self.assertEqual(result, 130)
+        popen.assert_not_called()
+
+    def test_terminate_child_process_signals_process_group(self):
+        process = mock.Mock()
+        process.pid = 43210
+        process.wait.return_value = 0
+
+        with mock.patch.object(manager.os, "killpg") as killpg:
+            manager._terminate_child_process(process, grace_seconds=1)
+
+        self.assertEqual(killpg.call_count, 2)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(43210, manager.signal.SIGTERM),
+                mock.call(43210, manager.signal.SIGKILL),
+            ],
+        )
+        process.wait.assert_has_calls([mock.call(timeout=1), mock.call()])
+
+    def test_terminate_child_process_kills_group_after_grace_timeout(self):
+        process = mock.Mock()
+        process.pid = 43211
+        process.wait.side_effect = [
+            manager.subprocess.TimeoutExpired("upstream", 1),
+            0,
+        ]
+
+        with mock.patch.object(manager.os, "killpg") as killpg:
+            manager._terminate_child_process(process, grace_seconds=1)
+
+        self.assertEqual(killpg.call_count, 2)
+        process.wait.assert_has_calls([mock.call(timeout=1), mock.call()])
+
+
+
+class StrictBooleanValidationTests(unittest.TestCase):
+    def test_manager_json_rejects_non_boolean_safety_flags(self):
+        invalid_values = ('"false"', '"true"', '0', '1', 'null')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "manager.json"
+            for field in ("preview_only", "allow_removal", "allow_data_deletion"):
+                for value in invalid_values:
+                    with self.subTest(field=field, value=value):
+                        path.write_text(
+                            '{{"{}": {}}}'.format(field, value),
+                            encoding="utf-8",
+                        )
+                        with self.assertRaises(ValueError):
+                            manager.load_json(path)
+
+    def test_manager_json_rejects_invalid_nested_boolean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "manager.json"
+            for section, field in (
+                ("schedule", "enabled"),
+                ("racing", "preview_only"),
+                ("hybrid", "allow_removal"),
+            ):
+                with self.subTest(section=section, field=field):
+                    path.write_text(
+                        '{{"{}": {{"{}": "false"}}}}'.format(section, field),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        manager.load_json(path)
+
+    def test_upstream_yaml_rejects_non_boolean_delete_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.yml"
+            for value in ('"false"', '"true"', '0', '1', 'null'):
+                with self.subTest(value=value):
+                    path.write_text(
+                        "example_task:\n  delete_data: {}\n".format(value),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        manager.load_upstream_yaml(path)
+
+
+class ScheduleSafetyGateTests(unittest.TestCase):
+    def test_only_explicit_true_enables_schedule(self):
+        self.assertTrue(manager._schedule_enabled({"schedule": {"enabled": True}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": False}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": "true"}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": 1}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {}}))
+        self.assertFalse(manager._schedule_enabled({}))
+
+    def test_invalid_schedule_section_fails_closed(self):
+        for value in (None, False, "true", []):
+            with self.subTest(value=value):
+                self.assertFalse(manager._schedule_enabled({"schedule": value}))
 
 if __name__ == "__main__":
     unittest.main()
