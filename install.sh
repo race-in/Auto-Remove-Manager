@@ -230,7 +230,7 @@ export PIP_NO_CACHE_DIR=1
 if "$VENV/bin/python" -c 'import sys; raise SystemExit(sys.version_info < (3,9))'; then
   "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
 else
-  # pip 25+ dropped Python 3.8; retain compatibility with legacy hosts.
+  # pip 25+ dropped Python 3.8; keep the last compatible pip line on legacy hosts.
   "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade "pip<25"
 fi
 "$VENV/bin/python" -m pip install --disable-pip-version-check -r "$BASE/requirements.txt"
@@ -256,6 +256,18 @@ data = {
         "ratio_min": 1.0,
         "sustain_seconds": 5.0,
         "poll_interval_seconds": 1.0
+    },
+    "hybrid": {
+        "enabled": False,
+        "preview_only": True,
+        "allow_removal": False,
+        "allow_data_deletion": False,
+        "download_threshold_mb": 100.0,
+        "upload_max_mb": 10.0,
+        "ratio_min": 1.0,
+        "sustain_seconds": 5.0,
+        "poll_interval_seconds": 1.0,
+        "cleanup_interval_seconds": 60.0
     }
 }
 fd, tmp = tempfile.mkstemp(prefix=".manager-", dir=os.path.dirname(path), text=True)

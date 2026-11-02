@@ -2,6 +2,7 @@ import pathlib
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -10,6 +11,28 @@ import manager
 
 
 class ManagerTests(unittest.TestCase):
+    def test_upstream_executable_is_found_in_active_virtualenv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = pathlib.Path(tmp)
+            bindir = venv / "bin"
+            bindir.mkdir()
+            executable = bindir / "autoremove-torrents"
+            executable.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch.object(manager.sys, "prefix", str(venv)), mock.patch.object(
+                manager.sys, "executable", str(bindir / "python")
+            ), mock.patch.object(manager.shutil, "which", return_value=None):
+                self.assertEqual(manager.find_upstream_executable(), str(executable))
+
+    def test_upstream_executable_falls_back_to_path(self):
+        with mock.patch.object(manager.sys, "prefix", "/missing/venv"), mock.patch.object(
+            manager.sys, "executable", "/missing/venv/bin/python"
+        ), mock.patch.object(manager.shutil, "which", return_value="/usr/local/bin/autoremove-torrents"):
+            self.assertEqual(
+                manager.find_upstream_executable(),
+                "/usr/local/bin/autoremove-torrents",
+            )
+
     def test_detection_reports_api_as_unverified(self):
         with mock.patch.object(manager, "process_inventory", return_value=[
             {"user": "seed", "command": "qbittorrent-nox", "args": "qbittorrent-nox"}
@@ -179,6 +202,171 @@ class ManagerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manager.load_upstream_yaml(path)
 
+
+    def test_upstream_is_not_started_after_stop_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = manager.argparse.Namespace(
+                log_dir=pathlib.Path(tmp),
+                upstream_config=pathlib.Path(tmp) / "config.yml",
+            )
+            stop = threading.Event()
+            stop.set()
+            with mock.patch.object(
+                manager, "find_upstream_executable", return_value="/bin/true"
+            ), mock.patch.object(manager.subprocess, "Popen") as popen:
+                result = manager.invoke_upstream(args, True, stop_event=stop)
+
+        self.assertEqual(result, 130)
+        popen.assert_not_called()
+
+    def test_keyboard_interrupt_terminates_upstream_process_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = manager.argparse.Namespace(
+                log_dir=pathlib.Path(tmp),
+                upstream_config=pathlib.Path(tmp) / "config.yml",
+            )
+            process = mock.Mock()
+            process.wait.side_effect = KeyboardInterrupt
+            with mock.patch.object(
+                manager, "find_upstream_executable", return_value="/bin/true"
+            ), mock.patch.object(
+                manager.subprocess, "Popen", return_value=process
+            ), mock.patch.object(
+                manager, "_terminate_child_process"
+            ) as terminate:
+                result = manager.invoke_upstream(args, False)
+
+        self.assertEqual(result, 130)
+        terminate.assert_called_once_with(process)
+
+    def test_terminate_child_process_survives_repeated_keyboard_interrupt(self):
+        process = mock.Mock()
+        process.pid = 43209
+        process.wait.side_effect = [
+            KeyboardInterrupt(),
+            manager.subprocess.TimeoutExpired("upstream", 1),
+            0,
+        ]
+        with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
+            manager.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 2.0]
+        ):
+            manager._terminate_child_process(process, grace_seconds=1)
+        self.assertEqual(killpg.call_args_list, [
+            mock.call(43209, manager.signal.SIGTERM),
+            mock.call(43209, manager.signal.SIGKILL),
+        ])
+        self.assertEqual(process.wait.call_count, 3)
+
+    def test_shutdown_signal_sets_stop_event_and_restores_handler(self):
+        stop = threading.Event()
+        previous = {manager.signal.SIGTERM: object(), manager.signal.SIGHUP: object()}
+        with mock.patch.object(manager.signal, "getsignal", side_effect=lambda sig: previous[sig]), mock.patch.object(
+            manager.signal, "signal"
+        ) as set_handler:
+            restore = manager.install_shutdown_handlers(stop)
+            handler = set_handler.call_args_list[0].args[1]
+            handler(manager.signal.SIGTERM, None)
+            self.assertTrue(stop.is_set())
+            restore()
+        self.assertEqual(set_handler.call_count, 4)
+        self.assertEqual(set_handler.call_args_list[-2].args, (manager.signal.SIGTERM, previous[manager.signal.SIGTERM]))
+        self.assertEqual(set_handler.call_args_list[-1].args, (manager.signal.SIGHUP, previous[manager.signal.SIGHUP]))
+
+    def test_terminate_child_process_signals_process_group(self):
+        process = mock.Mock()
+        process.pid = 43210
+        process.wait.return_value = 0
+
+        with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
+            manager.time, "monotonic", side_effect=[0.0, 0.0]
+        ):
+            manager._terminate_child_process(process, grace_seconds=1)
+
+        self.assertEqual(killpg.call_count, 2)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(43210, manager.signal.SIGTERM),
+                mock.call(43210, manager.signal.SIGKILL),
+            ],
+        )
+        process.wait.assert_has_calls([mock.call(timeout=1), mock.call()])
+
+    def test_terminate_child_process_kills_group_after_grace_timeout(self):
+        process = mock.Mock()
+        process.pid = 43211
+        process.wait.side_effect = [
+            manager.subprocess.TimeoutExpired("upstream", 1),
+            0,
+        ]
+
+        with mock.patch.object(manager.os, "killpg") as killpg, mock.patch.object(
+            manager.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
+        ):
+            manager._terminate_child_process(process, grace_seconds=1)
+
+        self.assertEqual(killpg.call_count, 2)
+        process.wait.assert_has_calls([mock.call(timeout=1), mock.call()])
+
+
+
+class StrictBooleanValidationTests(unittest.TestCase):
+    def test_manager_json_rejects_non_boolean_safety_flags(self):
+        invalid_values = ('"false"', '"true"', '0', '1', 'null')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "manager.json"
+            for field in ("preview_only", "allow_removal", "allow_data_deletion"):
+                for value in invalid_values:
+                    with self.subTest(field=field, value=value):
+                        path.write_text(
+                            '{{"{}": {}}}'.format(field, value),
+                            encoding="utf-8",
+                        )
+                        with self.assertRaises(ValueError):
+                            manager.load_json(path)
+
+    def test_manager_json_rejects_invalid_nested_boolean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "manager.json"
+            for section, field in (
+                ("schedule", "enabled"),
+                ("racing", "preview_only"),
+                ("hybrid", "allow_removal"),
+            ):
+                with self.subTest(section=section, field=field):
+                    path.write_text(
+                        '{{"{}": {{"{}": "false"}}}}'.format(section, field),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        manager.load_json(path)
+
+    def test_upstream_yaml_rejects_non_boolean_delete_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.yml"
+            for value in ('"false"', '"true"', '0', '1', 'null'):
+                with self.subTest(value=value):
+                    path.write_text(
+                        "example_task:\n  delete_data: {}\n".format(value),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        manager.load_upstream_yaml(path)
+
+
+class ScheduleSafetyGateTests(unittest.TestCase):
+    def test_only_explicit_true_enables_schedule(self):
+        self.assertTrue(manager._schedule_enabled({"schedule": {"enabled": True}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": False}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": "true"}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {"enabled": 1}}))
+        self.assertFalse(manager._schedule_enabled({"schedule": {}}))
+        self.assertFalse(manager._schedule_enabled({}))
+
+    def test_invalid_schedule_section_fails_closed(self):
+        for value in (None, False, "true", []):
+            with self.subTest(value=value):
+                self.assertFalse(manager._schedule_enabled({"schedule": value}))
 
 if __name__ == "__main__":
     unittest.main()

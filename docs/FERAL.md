@@ -94,3 +94,18 @@ Racing Mode is not started by the hourly cron entry. It is a separate long-runni
 ```
 
 Each client has its own worker and speed timer. A client must sustain at least 100 MB/s download speed for five seconds; then its own seeding torrents qualify at ratio >= 1.0 and live upload <= 10 MB/s. Seeding time is ignored. Preview-only is the default. Permanent torrent and payload deletion requires all three Racing Mode switches (`preview_only=false`, `allow_removal=true`, `allow_data_deletion=true`) to be deliberately enabled. API failures fail closed for that client.
+
+
+## Optional Hybrid Mode
+
+Hybrid Mode is a separate long-running process; the hourly cron schedule does not start it. It independently monitors each configured qBittorrent and Deluge task, switching that client from Normal to Racing after download speed remains at or above 100 MB/s for five seconds, and back to Normal after speed remains below 100 MB/s for five seconds.
+
+Enable `hybrid.enabled=true` in `~/.config/auto-remove-manager/manager.json`, then start it in a persistent terminal/session:
+
+```bash
+~/.local/bin/autoremove-manager hybrid
+```
+
+Keep `hybrid.preview_only=true`, `hybrid.allow_removal=false`, and `hybrid.allow_data_deletion=false` while validating. Hybrid uses the existing upstream YAML strategy in Normal mode and the Racing eligibility rules in Racing mode. Both modes share the manager cleanup lock. Review `racing.log` in the manager log directory and use `~/.local/bin/autoremove-manager logs` to display the log directory and its files.
+
+**Hybrid Racing deletion requires all six safeguards:** the top-level `preview_only=false`, `allow_removal=true`, and `allow_data_deletion=true`, plus the same three settings inside the `hybrid` object. Normal-mode removal additionally requires the top-level and Hybrid removal switches; if the task sets `delete_data: true`, both levels must also authorize data deletion. Do not enable these switches until API connectivity and preview candidates have been independently verified.
