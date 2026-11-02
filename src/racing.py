@@ -126,7 +126,7 @@ class ClientAPI:
             raise ValueError("Deluge host must be formatted as hostname:port.")
         self.rpc = DelugeRPCClient(
             host, int(port_text), self.username, self.password,
-            decode_utf8=True, timeout=8,
+            decode_utf8=True,
         )
         self.rpc.connect()
         # Verify authentication and the expected session API before monitoring.
