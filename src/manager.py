@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -584,26 +585,57 @@ def find_upstream_executable() -> str | None:
 
 
 def _terminate_child_process(process, grace_seconds: float = 10.0) -> None:
-    """Stop the upstream process group, including any child processes."""
+    """Stop and reap the entire upstream process group, even after repeated Ctrl-C."""
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
 
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        pass
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            process.wait(timeout=min(0.25, remaining))
+            break
+        except subprocess.TimeoutExpired:
+            continue
+        except KeyboardInterrupt:
+            # Do not let a second Ctrl-C bypass the mandatory SIGKILL/reap.
+            continue
 
-    # Kill any surviving descendants even if the group leader already exited.
+    # Always kill surviving descendants, even if the group leader exited.
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
 
-    # Always reap the direct child.
-    process.wait()
+    # Always reap the direct child; repeated interrupts must not escape cleanup.
+    while True:
+        try:
+            process.wait()
+            break
+        except KeyboardInterrupt:
+            continue
 
+
+def install_shutdown_handlers(stop_event):
+    """Translate supervisor termination signals into orderly worker shutdown."""
+    previous = {}
+
+    def request_shutdown(signum, frame):
+        stop_event.set()
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        previous[signum] = signal.getsignal(signum)
+        signal.signal(signum, request_shutdown)
+
+    def restore():
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+    return restore
 
 
 def invoke_upstream(args: argparse.Namespace, preview: bool,
@@ -823,7 +855,14 @@ def main() -> int:
             print("No configured client tasks. Run 'autoremove-manager configure' first.")
             return 0
         from hybrid import run_hybrid
-        return run_hybrid(tasks, hybrid_settings, args, settings)
+        stop_event = threading.Event()
+        restore_handlers = install_shutdown_handlers(stop_event)
+        try:
+            return run_hybrid(
+                tasks, hybrid_settings, args, settings, stop_event=stop_event
+            )
+        finally:
+            restore_handlers()
 
     if args.command == "racing":
         racing_settings = settings.get("racing", {})
@@ -869,11 +908,14 @@ def main() -> int:
     if lock is None:
         print("Another Auto-Remove-Manager run is already active; skipping.")
         return 0
+    stop_event = threading.Event()
+    restore_handlers = install_shutdown_handlers(stop_event)
     try:
         preview = not removal_mode
-        return invoke_upstream(args, preview)
+        return invoke_upstream(args, preview, stop_event=stop_event)
     finally:
         lock.close()
+        restore_handlers()
 
 
 if __name__ == "__main__":
